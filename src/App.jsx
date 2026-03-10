@@ -184,7 +184,13 @@ export default function FramewerksApp() {
   const [showCheckin, setShowCheckin] = useState(false);
   const [wellbeingCheckin, setWellbeingCheckin] = useState({ energy: null, stress: null, sleep: null, mood: null });
   const [wellbeingHistory, setWellbeingHistory] = useState([]);
+  const [weekSchedule, setWeekSchedule] = useState({}); // { Mon: { phaseIdx, dayIdx } | "rest", Tue: ... }
+  const [assigningDay, setAssigningDay] = useState(null); // which calendar day is being assigned
+  const [expandedPhase, setExpandedPhase] = useState(0); // which phase is expanded in program view
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2600); };
+  const WEEK_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const WEEK_FULL = { Mon: "Monday", Tue: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Fri: "Friday", Sat: "Saturday", Sun: "Sunday" };
+  const todayDayName = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date().getDay()];
 
   useEffect(() => {
     const unsub = onAuth(async (fu) => {
@@ -243,10 +249,168 @@ export default function FramewerksApp() {
     {view === "home" && (<div style={{ paddingBottom: 90 }}>
       <div style={{ padding: "52px 24px 20px" }}><p style={{ ...S.label, marginBottom: 4 }}>Today {"\u00B7"} {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p><h1 style={{ fontSize: 44, lineHeight: 0.92, letterSpacing: 3 }}>FRAMEWERKS<br /><span style={{ color: ACCENT }}>FITNESS</span></h1><p style={{ ...S.body, fontSize: 14, color: "#555", marginTop: 10 }}>Hey {firstName}</p></div>
       <div style={{ padding: "0 24px 18px" }}><div style={{ background: "#111", borderRadius: 16, border: `1px solid ${PILLAR_COLORS[todayLesson.pillar]}33`, padding: "16px", position: "relative", overflow: "hidden" }}><div style={{ position: "absolute", top: 0, left: 0, width: 4, height: "100%", background: PILLAR_COLORS[todayLesson.pillar] }} /><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}><span style={{ ...S.body, fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", background: PILLAR_COLORS[todayLesson.pillar] + "22", color: PILLAR_COLORS[todayLesson.pillar], borderRadius: 5, padding: "2px 8px" }}>{PILLAR_LABELS[todayLesson.pillar]}</span><span style={{ ...S.body, fontSize: 9, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: "#444" }}>{todayLesson.type === "knowledge" ? "\u{1F4A1} Knowledge" : "\u26A1 Action"}</span></div><p style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 18, letterSpacing: 1, marginBottom: 6 }}>{todayLesson.title}</p><p style={{ ...S.body, fontSize: 13, color: "#999", lineHeight: 1.55 }}>{todayLesson.text}</p></div></div>
-      <div style={{ padding: "0 24px 18px" }}><p style={{ ...S.label, marginBottom: 10 }}>Your Program</p>{program ? (<div style={{ background: "#111", borderRadius: 16, border: "1px solid #1E1E1E", overflow: "hidden", marginBottom: 12 }}><div style={{ height: 4, background: ACCENT }} /><div style={{ padding: "16px" }}><p style={{ fontSize: 28, letterSpacing: 1.5 }}>{program.name}</p>{program.tags?.length > 0 && <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>{program.tags.map(t => <span key={t} style={{ ...S.body, fontSize: 10, fontWeight: 700, background: ACCENT + "18", color: ACCENT, borderRadius: 5, padding: "2px 8px" }}>{t}</span>)}</div>}<p style={{ ...S.body, fontSize: 12, color: "#555", marginTop: 6, lineHeight: 1.5 }}>{program.description}</p></div><div style={{ padding: "0 16px 16px" }}>{program.phases.map((phase, pi) => (<div key={phase.id} style={{ marginBottom: pi < program.phases.length - 1 ? 14 : 0 }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderTop: "1px solid #1E1E1E" }}><p style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 18, letterSpacing: 1, color: ACCENT }}>{phase.name}</p><p style={{ ...S.body, fontSize: 11, color: "#555" }}>{phase.weeks} weeks{phase.progression?.type !== "none" ? ` \u00B7 +${phase.progression.amount}${phase.progression.unit}/${phase.progression.frequency}` : ""}</p></div>{phase.days.map((day, di) => { const totalEx = (day.warmup?.length || 0) + (day.exercises?.length || 0) + (day.cooldown?.length || 0); return (<div key={day.id} className="su pr" style={{ animationDelay: `${di * 0.04}s`, background: "#0A0A0A", borderRadius: 12, border: "1px solid #1A1A1A", marginBottom: 6, cursor: "pointer" }} onClick={() => startWorkout(phase, day)}><div style={{ padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}><div><p style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 17, letterSpacing: 1 }}>{day.label}</p><p style={{ ...S.body, fontSize: 10, color: "#555", marginTop: 2 }}>{totalEx} exercises</p></div><div style={{ background: ACCENT, borderRadius: 8, padding: "7px 14px" }}><span style={{ ...S.body, fontSize: 12, fontWeight: 700, color: "#fff" }}>Start</span></div></div></div>); })}</div>))}</div></div>) : (<div style={{ background: "#111", borderRadius: 14, padding: "24px 16px", border: "1px dashed #2A2A2A", textAlign: "center" }}><p style={{ fontSize: 28 }}>{"\u26A1"}</p><p style={{ ...S.body, fontSize: 13, color: "#555", marginTop: 8 }}>No program assigned yet. Your coach will send one to you.</p></div>)}</div>
+      {/* Weekly Calendar */}
+      <div style={{ padding: "0 24px 18px" }}>
+        <p style={{ ...S.label, marginBottom: 10 }}>This Week</p>
+        <div style={{ display: "flex", gap: 5 }}>
+          {WEEK_DAYS.map(d => {
+            const sched = weekSchedule[d];
+            const isToday = d === todayDayName;
+            const isRest = sched === "rest";
+            const hasWorkout = sched && sched !== "rest";
+            const dayData = hasWorkout && program ? program.phases[sched.phaseIdx]?.days[sched.dayIdx] : null;
+            return (
+              <div key={d} onClick={() => {
+                if (hasWorkout && dayData) startWorkout(program.phases[sched.phaseIdx], dayData);
+              }} style={{ flex: 1, background: isToday ? ACCENT + "18" : "#111", border: `1px solid ${isToday ? ACCENT : "#1E1E1E"}`, borderRadius: 12, padding: "8px 2px", textAlign: "center", cursor: hasWorkout ? "pointer" : "default", minHeight: 68 }}>
+                <p style={{ ...S.body, fontSize: 10, fontWeight: 700, color: isToday ? ACCENT : "#555", marginBottom: 4 }}>{d}</p>
+                {isRest ? (
+                  <p style={{ fontSize: 14 }}>{"\u{1F9D8}"}</p>
+                ) : hasWorkout && dayData ? (
+                  <div>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: ACCENT, margin: "0 auto 3px" }} />
+                    <p style={{ ...S.body, fontSize: 8, color: "#888", lineHeight: 1.2 }}>{dayData.label.replace(/^Wk\d+\s*[-–]\s*/, "").substring(0, 8)}</p>
+                  </div>
+                ) : (
+                  <p style={{ ...S.body, fontSize: 10, color: "#2A2A2A" }}>{"\u2014"}</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {Object.keys(weekSchedule).length === 0 && program && (
+          <p className="pr" onClick={() => setView("program")} style={{ ...S.body, fontSize: 12, color: ACCENT, textAlign: "center", marginTop: 10, cursor: "pointer" }}>Tap your program below to set up your week {"\u2192"}</p>
+        )}
+      </div>
+
+      {/* Program Card (compact) */}
+      <div style={{ padding: "0 24px 18px" }}><p style={{ ...S.label, marginBottom: 10 }}>Your Program</p>{program ? (
+        <div className="pr" onClick={() => setView("program")} style={{ background: "#111", borderRadius: 16, border: "1px solid #1E1E1E", overflow: "hidden", cursor: "pointer" }}>
+          {/* Placeholder image */}
+          <div style={{ width: "100%", height: 140, background: `linear-gradient(135deg, ${ACCENT}33, #0A0A0A)`, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+            <div style={{ position: "absolute", inset: 0, background: "linear-gradient(to top, #111 0%, transparent 60%)" }} />
+            <p style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 48, letterSpacing: 6, color: ACCENT + "33", position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -60%)" }}>FW</p>
+          </div>
+          <div style={{ padding: "14px 16px" }}>
+            <p style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 24, letterSpacing: 1.5 }}>{program.name}</p>
+            {program.tags?.length > 0 && <div style={{ display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" }}>{program.tags.map(t => <span key={t} style={{ ...S.body, fontSize: 10, fontWeight: 700, background: ACCENT + "18", color: ACCENT, borderRadius: 5, padding: "2px 8px" }}>{t}</span>)}</div>}
+            <p style={{ ...S.body, fontSize: 12, color: "#555", marginTop: 6, lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{program.description}</p>
+            <p style={{ ...S.body, fontSize: 11, color: ACCENT, marginTop: 8, fontWeight: 700 }}>View Program {"\u2192"}</p>
+          </div>
+        </div>
+      ) : (
+        <div style={{ background: "#111", borderRadius: 14, padding: "24px 16px", border: "1px dashed #2A2A2A", textAlign: "center" }}><p style={{ fontSize: 28 }}>{"\u26A1"}</p><p style={{ ...S.body, fontSize: 13, color: "#555", marginTop: 8 }}>No program assigned yet. Your coach will send one to you.</p></div>
+      )}</div>
       <div style={{ padding: "0 24px 18px" }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}><p style={{ ...S.label }}>Daily Habits {activeHabits.length > 0 ? `(${todayCompletions.filter(id => activeHabits.includes(id)).length}/${activeHabits.length})` : ""}</p><button onClick={() => setShowHabitPicker(true)} style={{ background: "none", border: "none", color: ACCENT, ...S.body, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{activeHabits.length > 0 ? "Edit" : "Choose Habits"}</button></div>{activeHabits.length === 0 ? (<div className="pr" onClick={() => setShowHabitPicker(true)} style={{ background: "#111", borderRadius: 14, padding: "24px 16px", border: "1px dashed #2A2A2A", textAlign: "center", cursor: "pointer" }}><p style={{ fontSize: 24 }}>{"\u{1F331}"}</p><p style={{ ...S.body, fontSize: 13, color: "#555", marginTop: 8 }}>Choose habits to build your daily practice</p></div>) : (<div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{activeHabits.map(hid => { const h = HABIT_POOL.find(hp => hp.id === hid); if (!h) return null; const done = todayCompletions.includes(hid); return (<div key={hid} className="pr" onClick={() => toggleHabit(hid)} style={{ background: done ? PILLAR_COLORS[h.pillar] + "12" : "#111", borderRadius: 14, border: `1px solid ${done ? PILLAR_COLORS[h.pillar] + "44" : "#1E1E1E"}`, padding: "12px 14px", display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}><div style={{ width: 32, height: 32, borderRadius: 10, background: done ? PILLAR_COLORS[h.pillar] : "#1A1A1A", border: done ? "none" : "1px solid #2A2A2A", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{done ? <span style={{ fontSize: 14, color: "#fff" }}>{"\u2713"}</span> : <span style={{ fontSize: 16 }}>{h.icon}</span>}</div><div style={{ flex: 1 }}><p style={{ ...S.body, fontSize: 13, fontWeight: 600, color: done ? "#666" : "#F0EDE8", textDecoration: done ? "line-through" : "none" }}>{h.name}</p><p style={{ ...S.body, fontSize: 10, color: "#444", marginTop: 1 }}>{h.desc}</p></div></div>); })}</div>)}</div>
       <div style={{ padding: "0 24px 18px" }}><button className="pr" onClick={() => { setWellbeingCheckin({ energy: null, stress: null, sleep: null, mood: null }); setShowCheckin(true); }} style={{ width: "100%", padding: "14px 16px", background: "#111", border: "1px solid #1E1E1E", borderRadius: 14, display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}><span style={{ fontSize: 24 }}>{"\u{1F4AC}"}</span><div style={{ textAlign: "left" }}><p style={{ ...S.body, fontSize: 14, fontWeight: 600, color: "#F0EDE8" }}>Wellbeing Check-In</p><p style={{ ...S.body, fontSize: 11, color: "#555" }}>How are you feeling today?</p></div></button></div>
       {workoutLogs.length > 0 && <div style={{ padding: "0 24px 18px" }}><p style={{ ...S.label, marginBottom: 10 }}>Last Session</p><div className="pr" onClick={() => { setDetailLog(workoutLogs[0]); setView("log-detail"); }} style={{ background: "#111", borderRadius: 14, padding: "13px 16px", border: "1px solid #1E1E1E", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}><div><p style={{ fontSize: 20, letterSpacing: 1 }}>{workoutLogs[0].dayLabel}</p><p style={{ ...S.body, fontSize: 11, color: "#555", marginTop: 2 }}>{workoutLogs[0].date} {"\u00B7"} {workoutLogs[0].programName}</p></div><span style={{ fontSize: 26 }}>{FEELING_OPTIONS.find(f => f.value === workoutLogs[0].feeling)?.icon || "\u{1F4AA}"}</span></div></div>}
+    </div>)}
+
+    {/* ═══ PROGRAM DETAIL VIEW ═══ */}
+    {view === "program" && program && (<div style={{ paddingBottom: 90 }}>
+      <div style={{ padding: "52px 24px 18px" }}>
+        <button onClick={() => setView("home")} style={S.backBtn}>{"\u2190"} Back</button>
+        <h2 style={{ fontSize: 36, letterSpacing: 2, lineHeight: 1 }}>{program.name}</h2>
+        {program.tags?.length > 0 && <div style={{ display: "flex", gap: 4, marginTop: 8, flexWrap: "wrap" }}>{program.tags.map(t => <span key={t} style={{ ...S.body, fontSize: 10, fontWeight: 700, background: ACCENT + "18", color: ACCENT, borderRadius: 5, padding: "2px 8px" }}>{t}</span>)}</div>}
+        <p style={{ ...S.body, fontSize: 13, color: "#555", marginTop: 8, lineHeight: 1.5 }}>{program.description}</p>
+      </div>
+
+      {/* Weekly Schedule Builder */}
+      <div style={{ padding: "0 24px 20px" }}>
+        <p style={{ ...S.label, marginBottom: 10 }}>Weekly Schedule</p>
+        <p style={{ ...S.body, fontSize: 12, color: "#555", marginBottom: 14 }}>Tap a day to assign a workout or rest day</p>
+        <div style={{ display: "flex", gap: 5, marginBottom: 10 }}>
+          {WEEK_DAYS.map(d => {
+            const sched = weekSchedule[d];
+            const isRest = sched === "rest";
+            const hasWorkout = sched && sched !== "rest";
+            const dayData = hasWorkout && program ? program.phases[sched.phaseIdx]?.days[sched.dayIdx] : null;
+            const isAssigning = assigningDay === d;
+            return (
+              <div key={d} style={{ flex: 1 }}>
+                <button onClick={() => setAssigningDay(isAssigning ? null : d)} style={{ width: "100%", background: isAssigning ? ACCENT + "22" : "#111", border: `1px solid ${isAssigning ? ACCENT : "#1E1E1E"}`, borderRadius: 12, padding: "10px 2px", textAlign: "center", cursor: "pointer", minHeight: 72 }}>
+                  <p style={{ ...S.body, fontSize: 11, fontWeight: 700, color: isAssigning ? ACCENT : "#555", marginBottom: 4 }}>{d}</p>
+                  {isRest ? <p style={{ fontSize: 16 }}>{"\u{1F9D8}"}</p>
+                  : hasWorkout ? <><div style={{ width: 8, height: 8, borderRadius: "50%", background: ACCENT, margin: "0 auto 2px" }} /><p style={{ ...S.body, fontSize: 7, color: "#888", lineHeight: 1.1 }}>{dayData?.label?.replace(/^Wk\d+\s*[-\u2013]\s*/, "").substring(0, 10)}</p></>
+                  : <p style={{ ...S.body, fontSize: 12, color: "#2A2A2A" }}>{"\u2014"}</p>}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        {/* Assignment picker */}
+        {assigningDay && (
+          <div className="fi" style={{ background: "#111", borderRadius: 14, border: "1px solid #1E1E1E", padding: "14px", marginBottom: 10 }}>
+            <p style={{ ...S.body, fontSize: 13, fontWeight: 600, color: "#F0EDE8", marginBottom: 10 }}>Assign to {WEEK_FULL[assigningDay]}:</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {program.phases.map((phase, pi) => phase.days.map((day, di) => {
+                const totalEx = (day.warmup?.length || 0) + (day.exercises?.length || 0) + (day.cooldown?.length || 0);
+                const isSelected = weekSchedule[assigningDay]?.phaseIdx === pi && weekSchedule[assigningDay]?.dayIdx === di;
+                return (
+                  <button key={`${pi}-${di}`} className="pr" onClick={() => { setWeekSchedule(p => ({ ...p, [assigningDay]: { phaseIdx: pi, dayIdx: di } })); setAssigningDay(null); showToast(`${day.label} assigned to ${WEEK_FULL[assigningDay]}`); }}
+                    style={{ width: "100%", padding: "10px 12px", background: isSelected ? ACCENT + "15" : "#0A0A0A", border: `1px solid ${isSelected ? ACCENT : "#1A1A1A"}`, borderRadius: 10, cursor: "pointer", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <p style={{ ...S.body, fontSize: 13, fontWeight: 600, color: isSelected ? ACCENT : "#F0EDE8" }}>{day.label}</p>
+                      <p style={{ ...S.body, fontSize: 10, color: "#555" }}>{phase.name} {"\u00B7"} {totalEx} exercises</p>
+                    </div>
+                    {isSelected && <span style={{ color: ACCENT }}>{"\u2713"}</span>}
+                  </button>
+                );
+              }))}
+              {/* Rest day option */}
+              <button className="pr" onClick={() => { setWeekSchedule(p => ({ ...p, [assigningDay]: "rest" })); setAssigningDay(null); showToast(`${WEEK_FULL[assigningDay]} set as rest day`); }}
+                style={{ width: "100%", padding: "10px 12px", background: weekSchedule[assigningDay] === "rest" ? "#00C2A815" : "#0A0A0A", border: `1px solid ${weekSchedule[assigningDay] === "rest" ? "#00C2A8" : "#1A1A1A"}`, borderRadius: 10, cursor: "pointer", textAlign: "left", display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 18 }}>{"\u{1F9D8}"}</span>
+                <p style={{ ...S.body, fontSize: 13, fontWeight: 600, color: weekSchedule[assigningDay] === "rest" ? "#00C2A8" : "#888" }}>Rest Day</p>
+              </button>
+              {/* Clear option */}
+              {weekSchedule[assigningDay] && (
+                <button className="pr" onClick={() => { setWeekSchedule(p => { const n = { ...p }; delete n[assigningDay]; return n; }); setAssigningDay(null); }}
+                  style={{ width: "100%", padding: "8px 12px", background: "transparent", border: "1px solid #1E1E1E", borderRadius: 10, cursor: "pointer", textAlign: "center" }}>
+                  <p style={{ ...S.body, fontSize: 12, color: "#555" }}>Clear</p>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Phases (collapsible) */}
+      <div style={{ padding: "0 24px" }}>
+        <p style={{ ...S.label, marginBottom: 10 }}>Phases</p>
+        {program.phases.map((phase, pi) => {
+          const isOpen = expandedPhase === pi;
+          return (
+            <div key={phase.id} style={{ background: "#111", borderRadius: 14, border: "1px solid #1E1E1E", overflow: "hidden", marginBottom: 10 }}>
+              <button onClick={() => setExpandedPhase(isOpen ? -1 : pi)} style={{ width: "100%", padding: "14px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", background: "transparent", border: "none", cursor: "pointer" }}>
+                <div style={{ textAlign: "left" }}>
+                  <p style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 20, letterSpacing: 1, color: isOpen ? ACCENT : "#F0EDE8" }}>{phase.name}</p>
+                  <p style={{ ...S.body, fontSize: 11, color: "#555", marginTop: 2 }}>{phase.weeks} weeks {"\u00B7"} {phase.days.length} workouts{phase.progression?.type !== "none" ? ` \u00B7 +${phase.progression.amount}${phase.progression.unit}` : ""}</p>
+                </div>
+                <span style={{ fontSize: 14, color: "#555", transition: "transform 0.2s", transform: isOpen ? "rotate(180deg)" : "rotate(0deg)" }}>{"\u2193"}</span>
+              </button>
+              {isOpen && (
+                <div style={{ padding: "0 16px 16px", animation: "slideUp 0.2s ease" }}>
+                  {phase.days.map((day, di) => {
+                    const totalEx = (day.warmup?.length || 0) + (day.exercises?.length || 0) + (day.cooldown?.length || 0);
+                    return (
+                      <div key={day.id} className="su pr" style={{ animationDelay: `${di * 0.04}s`, background: "#0A0A0A", borderRadius: 12, border: "1px solid #1A1A1A", marginBottom: 6, cursor: "pointer" }} onClick={() => startWorkout(phase, day)}>
+                        <div style={{ padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div>
+                            <p style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 17, letterSpacing: 1 }}>{day.label}</p>
+                            <p style={{ ...S.body, fontSize: 10, color: "#555", marginTop: 2 }}>{totalEx} exercises</p>
+                          </div>
+                          <div style={{ background: ACCENT, borderRadius: 8, padding: "7px 14px" }}><span style={{ ...S.body, fontSize: 12, fontWeight: 700, color: "#fff" }}>Start</span></div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>)}
 
     {showHabitPicker && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)", zIndex: 1500, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, animation: "fadeIn 0.2s ease" }}><div style={{ width: "100%", maxWidth: 400, background: "#111", borderRadius: 20, border: "1px solid #1E1E1E", padding: "28px 20px", maxHeight: "85vh", overflowY: "auto" }}><p style={{ fontSize: 28, letterSpacing: 2, marginBottom: 4 }}>BUILD YOUR PRACTICE</p><p style={{ ...S.body, fontSize: 13, color: "#555", marginBottom: 20 }}>Choose habits across all three pillars</p>{["nutrition", "mindfulness", "movement"].map(pillar => (<div key={pillar} style={{ marginBottom: 18 }}><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}><div style={{ width: 10, height: 10, borderRadius: "50%", background: PILLAR_COLORS[pillar] }} /><p style={{ ...S.body, fontSize: 12, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: PILLAR_COLORS[pillar] }}>{PILLAR_LABELS[pillar]}</p></div>{HABIT_POOL.filter(h => h.pillar === pillar).map(h => { const isA = activeHabits.includes(h.id); return (<button key={h.id} className="pr" onClick={() => setActiveHabits(p => isA ? p.filter(id => id !== h.id) : [...p, h.id])} style={{ width: "100%", display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: isA ? PILLAR_COLORS[pillar] + "15" : "#0A0A0A", border: `1px solid ${isA ? PILLAR_COLORS[pillar] + "55" : "#1A1A1A"}`, borderRadius: 12, cursor: "pointer", marginBottom: 6, textAlign: "left" }}><span style={{ fontSize: 20 }}>{h.icon}</span><div style={{ flex: 1 }}><p style={{ ...S.body, fontSize: 13, fontWeight: 600, color: isA ? PILLAR_COLORS[pillar] : "#888" }}>{h.name}</p><p style={{ ...S.body, fontSize: 10, color: "#444" }}>{h.desc}</p></div>{isA && <span style={{ fontSize: 14, color: PILLAR_COLORS[pillar] }}>{"\u2713"}</span>}</button>); })}</div>))}<button onClick={() => setShowHabitPicker(false)} style={{ width: "100%", padding: 14, background: ACCENT, border: "none", borderRadius: 14, color: "#fff", ...S.body, fontSize: 16, fontWeight: 700, cursor: "pointer" }}>Done</button></div></div>)}
