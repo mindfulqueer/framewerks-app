@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { onAuth, signInWithGoogle, logOut, getUserProfile, loadProgram, loadAllPrograms, saveWorkoutLog, loadWorkoutLogs, saveHabitEntry, loadHabitEntries } from "./firebase";
+import { onAuth, signInWithGoogle, logOut, getUserProfile, updateUserProfile, loadProgram, loadAllPrograms, saveWorkoutLog, loadWorkoutLogs, saveHabitEntry, loadHabitEntries } from "./firebase";
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const todayStr = () => new Date().toISOString().split("T")[0];
@@ -199,15 +199,44 @@ export default function FramewerksApp() {
         try {
           const prof = await getUserProfile(fu.uid); setProfile(prof);
           if (prof?.assignedProgramId) { const prog = await loadProgram(prof.assignedProgramId); setProgram(prog); }
+          if (prof?.weekSchedule) setWeekSchedule(prof.weekSchedule);
+          if (prof?.activeHabits) setActiveHabits(prof.activeHabits);
+          if (prof?.wellbeingHistory) setWellbeingHistory(prof.wellbeingHistory);
           const logs = await loadWorkoutLogs(fu.uid); setWorkoutLogs(logs);
+          // Load habit completions from habits collection
           const habs = await loadHabitEntries(fu.uid);
-          const comps = {}; habs.forEach(h => { if (h.completedHabits) comps[h.date] = h.completedHabits; }); setHabitCompletions(comps);
-          if (habs[0]?.activeHabits) setActiveHabits(habs[0].activeHabits);
-        } catch (err) { console.error(err); }
+          const comps = {};
+          habs.forEach(h => { if (h.completedHabits) comps[h.date] = h.completedHabits; });
+          setHabitCompletions(comps);
+        } catch (err) { console.error("Load error:", err); }
       } else { setUser(null); setProfile(null); setProgram(null); }
       setLoading(false);
     }); return unsub;
   }, []);
+
+  // ─── Loaded ref pattern: skip saves on initial load ───
+  const loaded = useRef(false);
+  useEffect(() => {
+    if (!loading && user) loaded.current = true;
+  }, [loading, user]);
+
+  // Save weekSchedule to user profile
+  useEffect(() => {
+    if (!loaded.current || !user) return;
+    updateUserProfile(user.uid, { weekSchedule }).catch(err => console.error("Schedule save:", err));
+  }, [weekSchedule]);
+
+  // Save activeHabits to user profile
+  useEffect(() => {
+    if (!loaded.current || !user) return;
+    updateUserProfile(user.uid, { activeHabits }).catch(err => console.error("Habits save:", err));
+  }, [activeHabits]);
+
+  // Save wellbeing history to user profile
+  useEffect(() => {
+    if (!loaded.current || !user) return;
+    updateUserProfile(user.uid, { wellbeingHistory: wellbeingHistory.slice(0, 30) }).catch(err => console.error("Wellbeing save:", err));
+  }, [wellbeingHistory]);
 
   const initLog = (day) => { const log = {}; const init = (exs) => (exs || []).forEach(ex => { log[ex.id] = { sets: ex.sets.map(() => ({ weight: "", reps: "", done: false })) }; }); init(day.warmup); init(day.exercises); init(day.cooldown); return log; };
   const updateSet = (eid, si, f, v) => setWorkoutLog(p => { const ex = p[eid] || { sets: [] }; const sets = [...ex.sets]; if (!sets[si]) sets[si] = {}; sets[si] = { ...sets[si], [f]: v }; return { ...p, [eid]: { ...ex, sets } }; });
@@ -229,7 +258,10 @@ export default function FramewerksApp() {
   const toggleHabit = async (hid) => {
     const updated = todayCompletions.includes(hid) ? todayCompletions.filter(id => id !== hid) : [...todayCompletions, hid];
     setHabitCompletions(p => ({ ...p, [todayKey]: updated }));
-    try { await saveHabitEntry({ date: todayKey, userId: user.uid, completedHabits: updated, activeHabits, entries: {} }); } catch (err) { console.error(err); }
+    if (user) {
+      try { await saveHabitEntry({ date: todayKey, userId: user.uid, completedHabits: updated, activeHabits, entries: {} }); }
+      catch (err) { console.error("Habit toggle save:", err); }
+    }
   };
 
   const dayOfYear = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
