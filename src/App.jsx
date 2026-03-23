@@ -105,7 +105,7 @@ function VideoModal({ url, title, onClose }) {
   return (<div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.95)", zIndex: 2000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16, animation: "fadeIn 0.2s ease" }}><div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 420 }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><p style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 20, letterSpacing: 2, color: "#F0EDE8" }}>{title}</p><button onClick={onClose} style={{ background: "#222", border: "none", color: "#888", borderRadius: 8, width: 34, height: 34, cursor: "pointer", fontSize: 16 }}>{"\u2715"}</button></div><div style={{ position: "relative", paddingBottom: "56.25%", borderRadius: 14, overflow: "hidden", background: "#111" }}><iframe src={url} title={title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: "none" }} /></div></div></div>);
 }
 
-function ExCard({ ex, idx, variant, logData, onUpdateSet, onToggleSet }) {
+function ExCard({ ex, idx, variant, logData, onUpdateSet, onToggleSet, onMarkDone }) {
   const [expanded, setExpanded] = useState(false);
   const [videoOpen, setVideoOpen] = useState(false);
   const videoId = ex.videoUrl ? ex.videoUrl.split("v=")[1]?.split("&")[0] || ex.videoUrl.split("/").pop() : null;
@@ -148,9 +148,9 @@ function ExCard({ ex, idx, variant, logData, onUpdateSet, onToggleSet }) {
           const target = ex.sets?.[sIdx];
           return (
             <div key={sIdx} style={{ display: "grid", gridTemplateColumns: "26px 1fr 1fr 26px", gap: 5, marginBottom: 5 }}>
-              <div style={{ width: 26, height: 38, borderRadius: 7, background: setLog.done ? ACCENT : "#181818", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <button onClick={() => onMarkDone(sIdx)} style={{ width: 26, height: 38, borderRadius: 7, background: setLog.done ? ACCENT : "#181818", display: "flex", alignItems: "center", justifyContent: "center", border: setLog.done ? "none" : "1px solid #2A2A2A", cursor: "pointer" }}>
                 <span style={{ ...S.body, fontSize: setLog.done ? 12 : 11, fontWeight: 700, color: setLog.done ? "#fff" : "#555" }}>{setLog.done ? "\u2713" : sIdx + 1}</span>
-              </div>
+              </button>
               <input type="number" placeholder={target?.weight || "\u2014"} value={setLog.weight} onChange={e => onUpdateSet(sIdx, "weight", e.target.value)} style={{ background: "#161616", border: "1px solid #242424", borderRadius: 8, color: "#F0EDE8", textAlign: "center", height: 38, width: "100%", fontSize: 15, fontFamily: "'Bebas Neue',sans-serif", letterSpacing: 1, outline: "none" }} />
               <input type="number" placeholder={target?.reps || "\u2014"} value={setLog.reps} onChange={e => onUpdateSet(sIdx, "reps", e.target.value)} style={{ background: "#161616", border: "1px solid #242424", borderRadius: 8, color: "#F0EDE8", textAlign: "center", height: 38, width: "100%", fontSize: 15, fontFamily: "'Bebas Neue',sans-serif", letterSpacing: 1, outline: "none" }} />
               <button onClick={() => onToggleSet(sIdx)} style={{ width: 26, height: 38, borderRadius: 7, background: setLog.done ? "#00C2A8" : "#181818", border: setLog.done ? "none" : "1px solid #2A2A2A", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: setLog.done ? "#fff" : "#333", fontSize: 12 }}>{setLog.done ? "\u2713" : ""}</button>
@@ -240,8 +240,50 @@ export default function FramewerksApp() {
 
   const initLog = (day) => { const log = {}; const init = (exs) => (exs || []).forEach(ex => { log[ex.id] = { sets: ex.sets.map(() => ({ weight: "", reps: "", done: false })) }; }); init(day.warmup); init(day.exercises); init(day.cooldown); return log; };
   const updateSet = (eid, si, f, v) => setWorkoutLog(p => { const ex = p[eid] || { sets: [] }; const sets = [...ex.sets]; if (!sets[si]) sets[si] = {}; sets[si] = { ...sets[si], [f]: v }; return { ...p, [eid]: { ...ex, sets } }; });
-  const toggleSet = (eid, si, rest) => { setWorkoutLog(p => { const ex = p[eid] || { sets: [] }; const sets = [...ex.sets]; if (!sets[si]) sets[si] = {}; const was = sets[si].done; sets[si] = { ...sets[si], done: !was }; return { ...p, [eid]: { ...ex, sets } }; }); if (!workoutLog[eid]?.sets?.[si]?.done) { setRestSeconds(parseInt(rest) || 60); setShowRestTimer(true); } };
-  const startWorkout = (phase, day) => { setActivePhase(phase); setActiveDay(day); setWorkoutLog(initLog(day)); setWorkoutFeeling(null); setWorkoutNotes(""); setView("workout"); };
+
+  // Mark set as done WITHOUT rest timer (left-side button)
+  const markSetDone = (eid, si) => {
+    setWorkoutLog(p => { const ex = p[eid] || { sets: [] }; const sets = [...ex.sets]; if (!sets[si]) sets[si] = {}; sets[si] = { ...sets[si], done: !sets[si].done }; return { ...p, [eid]: { ...ex, sets } }; });
+  };
+
+  // Mark set as done WITH rest timer (right-side button)
+  const toggleSet = (eid, si, rest) => {
+    const wasDone = workoutLog[eid]?.sets?.[si]?.done;
+    setWorkoutLog(p => { const ex = p[eid] || { sets: [] }; const sets = [...ex.sets]; if (!sets[si]) sets[si] = {}; sets[si] = { ...sets[si], done: !sets[si].done }; return { ...p, [eid]: { ...ex, sets } }; });
+    if (!wasDone) { setRestSeconds(parseInt(rest) || 60); setShowRestTimer(true); }
+  };
+
+  const startWorkout = (phase, day) => {
+    // Check for in-progress session
+    if (user) {
+      getUserProfile(user.uid).then(prof => {
+        if (prof?.inProgressWorkout?.dayId === day.id && prof?.inProgressWorkout?.date === todayStr()) {
+          setWorkoutLog(prof.inProgressWorkout.log);
+          setWorkoutFeeling(prof.inProgressWorkout.feeling || null);
+          setWorkoutNotes(prof.inProgressWorkout.notes || "");
+          showToast("Resumed your session");
+        } else {
+          setWorkoutLog(initLog(day));
+          setWorkoutFeeling(null);
+          setWorkoutNotes("");
+        }
+      }).catch(() => { setWorkoutLog(initLog(day)); setWorkoutFeeling(null); setWorkoutNotes(""); });
+    } else {
+      setWorkoutLog(initLog(day)); setWorkoutFeeling(null); setWorkoutNotes("");
+    }
+    setActivePhase(phase); setActiveDay(day); setView("workout");
+  };
+
+  // Auto-save workout in progress to Firebase
+  useEffect(() => {
+    if (!user || view !== "workout" || !activeDay) return;
+    const timeout = setTimeout(() => {
+      updateUserProfile(user.uid, {
+        inProgressWorkout: { dayId: activeDay.id, date: todayStr(), log: workoutLog, feeling: workoutFeeling, notes: workoutNotes }
+      }).catch(err => console.error("Autosave workout:", err));
+    }, 1500); // Debounce 1.5s
+    return () => clearTimeout(timeout);
+  }, [workoutLog, workoutFeeling, workoutNotes, view]);
 
   const finishWorkout = async () => {
     if (!workoutFeeling) return showToast("Rate how you felt first!");
@@ -249,7 +291,11 @@ export default function FramewerksApp() {
     const totalSets = allEx.reduce((s, ex) => s + (ex.sets?.length || 0), 0);
     const doneSets = allEx.reduce((s, ex) => s + (workoutLog[ex.id]?.sets || []).filter(st => st.done).length, 0);
     const log = { id: uid(), userId: user.uid, programId: program?.id, programName: program?.name || "Custom", phaseId: activePhase?.id, phaseName: activePhase?.name || "", dayId: activeDay.id, dayLabel: activeDay.label, date: todayStr(), feeling: workoutFeeling, notes: workoutNotes, duration: 0, totalSets, completedSets: doneSets, exercises: allEx.map(ex => ({ name: ex.name, sets: (workoutLog[ex.id]?.sets || []).map(s => ({ reps: s.reps, weight: s.weight, done: s.done })) })) };
-    try { await saveWorkoutLog(log); } catch (err) { console.error(err); }
+    try {
+      await saveWorkoutLog(log);
+      // Clear in-progress session
+      await updateUserProfile(user.uid, { inProgressWorkout: null });
+    } catch (err) { console.error("Finish workout error:", err); }
     setWorkoutLogs(p => [log, ...p]); showToast("Session saved! \u{1F525}"); setView("home");
   };
 
@@ -450,9 +496,9 @@ export default function FramewerksApp() {
     {showCheckin && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)", zIndex: 1500, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, animation: "fadeIn 0.2s ease" }}><div style={{ width: "100%", maxWidth: 380, background: "#111", borderRadius: 20, border: "1px solid #1E1E1E", padding: "28px 22px", maxHeight: "85vh", overflowY: "auto" }}><p style={{ fontSize: 28, letterSpacing: 2, marginBottom: 6 }}>CHECK-IN</p><p style={{ ...S.body, fontSize: 13, color: "#555", marginBottom: 20 }}>How are you feeling today?</p>{[{ key: "energy", label: "Energy Level", options: [{ v: 1, l: "Low", e: "\u{1F634}" }, { v: 2, l: "Moderate", e: "\u{1F610}" }, { v: 3, l: "Good", e: "\u{1F60A}" }, { v: 4, l: "High", e: "\u26A1" }] }, { key: "stress", label: "Stress Level", options: [{ v: 1, l: "High", e: "\u{1F630}" }, { v: 2, l: "Moderate", e: "\u{1F624}" }, { v: 3, l: "Low", e: "\u{1F60C}" }, { v: 4, l: "Minimal", e: "\u{1F9D8}" }] }, { key: "sleep", label: "Sleep Quality", options: [{ v: 1, l: "Poor", e: "\u{1F635}" }, { v: 2, l: "Fair", e: "\u{1F611}" }, { v: 3, l: "Good", e: "\u{1F634}" }, { v: 4, l: "Great", e: "\u{1F4A4}" }] }, { key: "mood", label: "Overall Mood", options: [{ v: 1, l: "Rough", e: "\u{1F61E}" }, { v: 2, l: "Okay", e: "\u{1F610}" }, { v: 3, l: "Good", e: "\u{1F642}" }, { v: 4, l: "Great", e: "\u{1F601}" }] }].map(cat => (<div key={cat.key} style={{ marginBottom: 18 }}><p style={{ ...S.label, marginBottom: 8 }}>{cat.label}</p><div style={{ display: "flex", gap: 6 }}>{cat.options.map(opt => (<button key={opt.v} onClick={() => setWellbeingCheckin(p => ({ ...p, [cat.key]: opt.v }))} style={{ flex: 1, padding: "10px 4px", borderRadius: 10, background: wellbeingCheckin[cat.key] === opt.v ? ACCENT + "22" : "#0A0A0A", border: `1px solid ${wellbeingCheckin[cat.key] === opt.v ? ACCENT : "#1E1E1E"}`, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}><span style={{ fontSize: 20 }}>{opt.e}</span><span style={{ ...S.body, fontSize: 9, fontWeight: 600, color: wellbeingCheckin[cat.key] === opt.v ? ACCENT : "#444" }}>{opt.l}</span></button>))}</div></div>))}<div style={{ display: "flex", gap: 10, marginTop: 6 }}><button onClick={() => setShowCheckin(false)} style={{ flex: 1, padding: 14, background: "#1A1A1A", border: "1px solid #2A2A2A", borderRadius: 14, color: "#888", ...S.body, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Cancel</button><button onClick={() => { if (!wellbeingCheckin.energy || !wellbeingCheckin.stress || !wellbeingCheckin.sleep || !wellbeingCheckin.mood) return showToast("Complete all 4 categories"); setWellbeingHistory(p => [{ ...wellbeingCheckin, date: todayStr(), id: Date.now() }, ...p]); setShowCheckin(false); showToast("Check-in saved! \u{1F64F}"); }} style={{ flex: 1, padding: 14, background: ACCENT, border: "none", borderRadius: 14, color: "#fff", ...S.body, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>Save</button></div></div></div>)}
 
     {view === "workout" && activeDay && (<div style={{ paddingBottom: 90 }}><div style={{ padding: "52px 24px 18px", background: "#0D0D0D", borderBottom: "1px solid #1A1A1A" }}><button onClick={() => setView("home")} style={S.backBtn}>{"\u2715"} Cancel Workout</button><h2 style={{ fontSize: 36, letterSpacing: 2, lineHeight: 1 }}>{activeDay.label}</h2><p style={{ ...S.body, fontSize: 13, color: "#555", marginTop: 4 }}>{activePhase?.name} {"\u00B7"} {program?.name}</p></div><div style={{ padding: "20px 24px" }}>
-      {activeDay.warmup?.length > 0 && (<><p style={{ ...S.label, color: "#FF9800", marginBottom: 10 }}>{"\u{1F305}"} Warm-up</p>{activeDay.warmup.map((ex, i) => <ExCard key={ex.id} ex={ex} idx={i} variant="warmup" logData={workoutLog[ex.id]?.sets || []} onUpdateSet={(si, f, v) => updateSet(ex.id, si, f, v)} onToggleSet={(si) => toggleSet(ex.id, si, ex.restSeconds)} />)}</>)}
-      {activeDay.exercises?.length > 0 && (<><p style={{ ...S.label, color: ACCENT, marginBottom: 10, marginTop: activeDay.warmup?.length ? 16 : 0 }}>{"\u{1F3CB}\uFE0F"} Main Work</p>{activeDay.exercises.map((ex, i) => <ExCard key={ex.id} ex={ex} idx={i} variant="main" logData={workoutLog[ex.id]?.sets || []} onUpdateSet={(si, f, v) => updateSet(ex.id, si, f, v)} onToggleSet={(si) => toggleSet(ex.id, si, ex.restSeconds)} />)}</>)}
-      {activeDay.cooldown?.length > 0 && (<><p style={{ ...S.label, color: "#00C2A8", marginBottom: 10, marginTop: 16 }}>{"\u{1F319}"} Cool-down</p>{activeDay.cooldown.map((ex, i) => <ExCard key={ex.id} ex={ex} idx={i} variant="cooldown" logData={workoutLog[ex.id]?.sets || []} onUpdateSet={(si, f, v) => updateSet(ex.id, si, f, v)} onToggleSet={(si) => toggleSet(ex.id, si, ex.restSeconds)} />)}</>)}
+      {activeDay.warmup?.length > 0 && (<><p style={{ ...S.label, color: "#FF9800", marginBottom: 10 }}>{"\u{1F305}"} Warm-up</p>{activeDay.warmup.map((ex, i) => <ExCard key={ex.id} ex={ex} idx={i} variant="warmup" logData={workoutLog[ex.id]?.sets || []} onUpdateSet={(si, f, v) => updateSet(ex.id, si, f, v)} onToggleSet={(si) => toggleSet(ex.id, si, ex.restSeconds)} onMarkDone={(si) => markSetDone(ex.id, si)} />)}</>)}
+      {activeDay.exercises?.length > 0 && (<><p style={{ ...S.label, color: ACCENT, marginBottom: 10, marginTop: activeDay.warmup?.length ? 16 : 0 }}>{"\u{1F3CB}\uFE0F"} Main Work</p>{activeDay.exercises.map((ex, i) => <ExCard key={ex.id} ex={ex} idx={i} variant="main" logData={workoutLog[ex.id]?.sets || []} onUpdateSet={(si, f, v) => updateSet(ex.id, si, f, v)} onToggleSet={(si) => toggleSet(ex.id, si, ex.restSeconds)} onMarkDone={(si) => markSetDone(ex.id, si)} />)}</>)}
+      {activeDay.cooldown?.length > 0 && (<><p style={{ ...S.label, color: "#00C2A8", marginBottom: 10, marginTop: 16 }}>{"\u{1F319}"} Cool-down</p>{activeDay.cooldown.map((ex, i) => <ExCard key={ex.id} ex={ex} idx={i} variant="cooldown" logData={workoutLog[ex.id]?.sets || []} onUpdateSet={(si, f, v) => updateSet(ex.id, si, f, v)} onToggleSet={(si) => toggleSet(ex.id, si, ex.restSeconds)} onMarkDone={(si) => markSetDone(ex.id, si)} />)}</>)}
       <div style={{ background: "#111", borderRadius: 16, border: "1px solid #1E1E1E", padding: "18px 16px", marginTop: 20 }}><p style={{ ...S.label, marginBottom: 12 }}>How did that feel?</p><div style={{ display: "flex", gap: 6, marginBottom: 14 }}>{FEELING_OPTIONS.map(f => (<button key={f.value} className="pr" onClick={() => setWorkoutFeeling(f.value)} style={{ flex: 1, padding: "10px 4px", borderRadius: 12, background: workoutFeeling === f.value ? f.color + "25" : "#0A0A0A", border: `2px solid ${workoutFeeling === f.value ? f.color : "#1E1E1E"}`, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}><span style={{ fontSize: 22 }}>{f.icon}</span><span style={{ ...S.body, fontSize: 9, fontWeight: 700, color: workoutFeeling === f.value ? f.color : "#444" }}>{f.label}</span></button>))}</div><textarea placeholder="Notes (optional)..." value={workoutNotes} onChange={e => setWorkoutNotes(e.target.value)} style={{ width: "100%", background: "#0A0A0A", border: "1px solid #1E1E1E", borderRadius: 10, color: "#F0EDE8", padding: "10px 14px", fontSize: 13, fontFamily: "'DM Sans',sans-serif", outline: "none", resize: "none", minHeight: 60 }} /></div>
       <button className="pr" onClick={finishWorkout} style={{ width: "100%", padding: 16, background: ACCENT, border: "none", borderRadius: 14, color: "#fff", fontFamily: "'Bebas Neue',sans-serif", fontSize: 22, letterSpacing: 2, cursor: "pointer", marginTop: 16 }}>FINISH WORKOUT</button>
     </div></div>)}
