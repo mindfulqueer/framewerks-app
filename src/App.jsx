@@ -105,7 +105,7 @@ function VideoModal({ url, title, onClose }) {
   return (<div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.95)", zIndex: 2000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16, animation: "fadeIn 0.2s ease" }}><div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 420 }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><p style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 20, letterSpacing: 2, color: "#F0EDE8" }}>{title}</p><button onClick={onClose} style={{ background: "#222", border: "none", color: "#888", borderRadius: 8, width: 34, height: 34, cursor: "pointer", fontSize: 16 }}>{"\u2715"}</button></div><div style={{ position: "relative", paddingBottom: "56.25%", borderRadius: 14, overflow: "hidden", background: "#111" }}><iframe src={url} title={title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: "none" }} /></div></div></div>);
 }
 
-function ExCard({ ex, idx, variant, logData, onUpdateSet, onToggleSet, onMarkDone }) {
+function ExCard({ ex, idx, variant, logData, onUpdateSet, onToggleSet, onMarkDone, onTapName }) {
   const [expanded, setExpanded] = useState(false);
   const [videoOpen, setVideoOpen] = useState(false);
   const videoId = ex.videoUrl ? ex.videoUrl.split("v=")[1]?.split("&")[0] || ex.videoUrl.split("/").pop() : null;
@@ -122,7 +122,7 @@ function ExCard({ ex, idx, variant, logData, onUpdateSet, onToggleSet, onMarkDon
           <div style={{ width: 44, height: 44, borderRadius: 11, background: variant === "warmup" ? "#FF980022" : variant === "cooldown" ? "#00C2A822" : ACCENT + "22", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}><span style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 18, color: variant === "warmup" ? "#FF9800" : variant === "cooldown" ? "#00C2A8" : ACCENT }}>{idx + 1}</span></div>
         )}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <p style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 20, letterSpacing: 1, lineHeight: 1 }}>{ex.name || "Exercise"}</p>
+          <p onClick={() => onTapName && onTapName(ex.name)} style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 20, letterSpacing: 1, lineHeight: 1, cursor: onTapName ? "pointer" : "default", textDecoration: onTapName ? "underline" : "none", textDecorationColor: ACCENT + "44", textUnderlineOffset: 3 }}>{ex.name || "Exercise"}</p>
           <p style={{ ...S.body, fontSize: 11, color: "#555", marginTop: 3 }}>{ex.sets?.length || 0} sets</p>
           {(ex.sets?.[0]?.tempo || ex.sets?.[0]?.rpe) && (
             <div style={{ display: "flex", gap: 6, marginTop: 5, flexWrap: "wrap" }}>
@@ -187,10 +187,69 @@ export default function FramewerksApp() {
   const [weekSchedule, setWeekSchedule] = useState({}); // { Mon: { phaseIdx, dayIdx } | "rest", Tue: ... }
   const [assigningDay, setAssigningDay] = useState(null); // which calendar day is being assigned
   const [expandedPhase, setExpandedPhase] = useState(0); // which phase is expanded in program view
+  const [trackerExercise, setTrackerExercise] = useState(null); // exercise name for progress view
+  const [prevView, setPrevView] = useState(null); // where to return from tracker
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2600); };
   const WEEK_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const WEEK_FULL = { Mon: "Monday", Tue: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Fri: "Friday", Sat: "Saturday", Sun: "Sunday" };
   const todayDayName = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date().getDay()];
+
+  // ─── Exercise History Helpers ───
+  const getExerciseHistory = useCallback((exerciseName) => {
+    if (!exerciseName) return [];
+    const name = exerciseName.toLowerCase();
+    const entries = [];
+    workoutLogs.forEach(log => {
+      (log.exercises || []).forEach(ex => {
+        if (ex.name?.toLowerCase() === name) {
+          (ex.sets || []).forEach((s, si) => {
+            if (s.weight || s.reps) {
+              entries.push({ date: log.date, dayLabel: log.dayLabel, setNum: si + 1, weight: parseFloat(s.weight) || 0, reps: s.reps || "\u2014", done: s.done });
+            }
+          });
+        }
+      });
+    });
+    return entries;
+  }, [workoutLogs]);
+
+  const getAutoWeight = useCallback((exerciseName) => {
+    if (!exerciseName) return null;
+    const name = exerciseName.toLowerCase();
+    for (const log of workoutLogs) {
+      const ex = (log.exercises || []).find(e => e.name?.toLowerCase() === name);
+      if (ex && ex.sets?.length >= 2) {
+        const lastTwo = ex.sets.slice(-2).filter(s => s.weight && parseFloat(s.weight) > 0);
+        if (lastTwo.length === 2) return Math.round((parseFloat(lastTwo[0].weight) + parseFloat(lastTwo[1].weight)) / 2);
+        if (lastTwo.length === 1) return Math.round(parseFloat(lastTwo[0].weight));
+      } else if (ex?.sets?.[0]?.weight) return Math.round(parseFloat(ex.sets[0].weight));
+    }
+    return null;
+  }, [workoutLogs]);
+
+  const allExerciseNames = useMemo(() => {
+    const names = new Set();
+    workoutLogs.forEach(log => (log.exercises || []).forEach(ex => { if (ex.name) names.add(ex.name); }));
+    return Array.from(names).sort();
+  }, [workoutLogs]);
+
+  const exerciseWeightSummary = useMemo(() => {
+    const summary = {};
+    workoutLogs.forEach(log => {
+      (log.exercises || []).forEach(ex => {
+        if (!ex.name) return;
+        if (!summary[ex.name]) summary[ex.name] = { maxWeight: 0, totalSets: 0, sessions: 0 };
+        summary[ex.name].sessions++;
+        (ex.sets || []).forEach(s => {
+          if (s.weight) { const w = parseFloat(s.weight); if (w > summary[ex.name].maxWeight) summary[ex.name].maxWeight = w; }
+          if (s.done) summary[ex.name].totalSets++;
+        });
+      });
+    });
+    return summary;
+  }, [workoutLogs]);
+
+  const openTracker = (name, from) => { setTrackerExercise(name); setPrevView(from || view); setView("tracker"); };
 
   useEffect(() => {
     const unsub = onAuth(async (fu) => {
@@ -238,7 +297,20 @@ export default function FramewerksApp() {
     updateUserProfile(user.uid, { wellbeingHistory: wellbeingHistory.slice(0, 30) }).catch(err => console.error("Wellbeing save:", err));
   }, [wellbeingHistory]);
 
-  const initLog = (day) => { const log = {}; const init = (exs) => (exs || []).forEach(ex => { log[ex.id] = { sets: ex.sets.map(() => ({ weight: "", reps: "", done: false })) }; }); init(day.warmup); init(day.exercises); init(day.cooldown); return log; };
+  const initLog = (day) => {
+    const log = {};
+    const init = (exs) => (exs || []).forEach(ex => {
+      const autoWeight = getAutoWeight(ex.name);
+      log[ex.id] = {
+        sets: ex.sets.map((s, si) => ({
+          weight: si === 0 && autoWeight ? String(autoWeight) : "",
+          reps: "", done: false
+        }))
+      };
+    });
+    init(day.warmup); init(day.exercises); init(day.cooldown);
+    return log;
+  };
   const updateSet = (eid, si, f, v) => setWorkoutLog(p => { const ex = p[eid] || { sets: [] }; const sets = [...ex.sets]; if (!sets[si]) sets[si] = {}; sets[si] = { ...sets[si], [f]: v }; return { ...p, [eid]: { ...ex, sets } }; });
 
   // Mark set as done WITHOUT rest timer (left-side button)
@@ -496,19 +568,110 @@ export default function FramewerksApp() {
     {showCheckin && (<div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.92)", zIndex: 1500, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, animation: "fadeIn 0.2s ease" }}><div style={{ width: "100%", maxWidth: 380, background: "#111", borderRadius: 20, border: "1px solid #1E1E1E", padding: "28px 22px", maxHeight: "85vh", overflowY: "auto" }}><p style={{ fontSize: 28, letterSpacing: 2, marginBottom: 6 }}>CHECK-IN</p><p style={{ ...S.body, fontSize: 13, color: "#555", marginBottom: 20 }}>How are you feeling today?</p>{[{ key: "energy", label: "Energy Level", options: [{ v: 1, l: "Low", e: "\u{1F634}" }, { v: 2, l: "Moderate", e: "\u{1F610}" }, { v: 3, l: "Good", e: "\u{1F60A}" }, { v: 4, l: "High", e: "\u26A1" }] }, { key: "stress", label: "Stress Level", options: [{ v: 1, l: "High", e: "\u{1F630}" }, { v: 2, l: "Moderate", e: "\u{1F624}" }, { v: 3, l: "Low", e: "\u{1F60C}" }, { v: 4, l: "Minimal", e: "\u{1F9D8}" }] }, { key: "sleep", label: "Sleep Quality", options: [{ v: 1, l: "Poor", e: "\u{1F635}" }, { v: 2, l: "Fair", e: "\u{1F611}" }, { v: 3, l: "Good", e: "\u{1F634}" }, { v: 4, l: "Great", e: "\u{1F4A4}" }] }, { key: "mood", label: "Overall Mood", options: [{ v: 1, l: "Rough", e: "\u{1F61E}" }, { v: 2, l: "Okay", e: "\u{1F610}" }, { v: 3, l: "Good", e: "\u{1F642}" }, { v: 4, l: "Great", e: "\u{1F601}" }] }].map(cat => (<div key={cat.key} style={{ marginBottom: 18 }}><p style={{ ...S.label, marginBottom: 8 }}>{cat.label}</p><div style={{ display: "flex", gap: 6 }}>{cat.options.map(opt => (<button key={opt.v} onClick={() => setWellbeingCheckin(p => ({ ...p, [cat.key]: opt.v }))} style={{ flex: 1, padding: "10px 4px", borderRadius: 10, background: wellbeingCheckin[cat.key] === opt.v ? ACCENT + "22" : "#0A0A0A", border: `1px solid ${wellbeingCheckin[cat.key] === opt.v ? ACCENT : "#1E1E1E"}`, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}><span style={{ fontSize: 20 }}>{opt.e}</span><span style={{ ...S.body, fontSize: 9, fontWeight: 600, color: wellbeingCheckin[cat.key] === opt.v ? ACCENT : "#444" }}>{opt.l}</span></button>))}</div></div>))}<div style={{ display: "flex", gap: 10, marginTop: 6 }}><button onClick={() => setShowCheckin(false)} style={{ flex: 1, padding: 14, background: "#1A1A1A", border: "1px solid #2A2A2A", borderRadius: 14, color: "#888", ...S.body, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Cancel</button><button onClick={() => { if (!wellbeingCheckin.energy || !wellbeingCheckin.stress || !wellbeingCheckin.sleep || !wellbeingCheckin.mood) return showToast("Complete all 4 categories"); setWellbeingHistory(p => [{ ...wellbeingCheckin, date: todayStr(), id: Date.now() }, ...p]); setShowCheckin(false); showToast("Check-in saved! \u{1F64F}"); }} style={{ flex: 1, padding: 14, background: ACCENT, border: "none", borderRadius: 14, color: "#fff", ...S.body, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>Save</button></div></div></div>)}
 
     {view === "workout" && activeDay && (<div style={{ paddingBottom: 90 }}><div style={{ padding: "52px 24px 18px", background: "#0D0D0D", borderBottom: "1px solid #1A1A1A" }}><button onClick={() => setView("home")} style={S.backBtn}>{"\u2715"} Cancel Workout</button><h2 style={{ fontSize: 36, letterSpacing: 2, lineHeight: 1 }}>{activeDay.label}</h2><p style={{ ...S.body, fontSize: 13, color: "#555", marginTop: 4 }}>{activePhase?.name} {"\u00B7"} {program?.name}</p></div><div style={{ padding: "20px 24px" }}>
-      {activeDay.warmup?.length > 0 && (<><p style={{ ...S.label, color: "#FF9800", marginBottom: 10 }}>{"\u{1F305}"} Warm-up</p>{activeDay.warmup.map((ex, i) => <ExCard key={ex.id} ex={ex} idx={i} variant="warmup" logData={workoutLog[ex.id]?.sets || []} onUpdateSet={(si, f, v) => updateSet(ex.id, si, f, v)} onToggleSet={(si) => toggleSet(ex.id, si, ex.restSeconds)} onMarkDone={(si) => markSetDone(ex.id, si)} />)}</>)}
-      {activeDay.exercises?.length > 0 && (<><p style={{ ...S.label, color: ACCENT, marginBottom: 10, marginTop: activeDay.warmup?.length ? 16 : 0 }}>{"\u{1F3CB}\uFE0F"} Main Work</p>{activeDay.exercises.map((ex, i) => <ExCard key={ex.id} ex={ex} idx={i} variant="main" logData={workoutLog[ex.id]?.sets || []} onUpdateSet={(si, f, v) => updateSet(ex.id, si, f, v)} onToggleSet={(si) => toggleSet(ex.id, si, ex.restSeconds)} onMarkDone={(si) => markSetDone(ex.id, si)} />)}</>)}
-      {activeDay.cooldown?.length > 0 && (<><p style={{ ...S.label, color: "#00C2A8", marginBottom: 10, marginTop: 16 }}>{"\u{1F319}"} Cool-down</p>{activeDay.cooldown.map((ex, i) => <ExCard key={ex.id} ex={ex} idx={i} variant="cooldown" logData={workoutLog[ex.id]?.sets || []} onUpdateSet={(si, f, v) => updateSet(ex.id, si, f, v)} onToggleSet={(si) => toggleSet(ex.id, si, ex.restSeconds)} onMarkDone={(si) => markSetDone(ex.id, si)} />)}</>)}
+      {activeDay.warmup?.length > 0 && (<><p style={{ ...S.label, color: "#FF9800", marginBottom: 10 }}>{"\u{1F305}"} Warm-up</p>{activeDay.warmup.map((ex, i) => <ExCard key={ex.id} ex={ex} idx={i} variant="warmup" logData={workoutLog[ex.id]?.sets || []} onUpdateSet={(si, f, v) => updateSet(ex.id, si, f, v)} onToggleSet={(si) => toggleSet(ex.id, si, ex.restSeconds)} onMarkDone={(si) => markSetDone(ex.id, si)} onTapName={(name) => openTracker(name, "workout")} />)}</>)}
+      {activeDay.exercises?.length > 0 && (<><p style={{ ...S.label, color: ACCENT, marginBottom: 10, marginTop: activeDay.warmup?.length ? 16 : 0 }}>{"\u{1F3CB}\uFE0F"} Main Work</p>{activeDay.exercises.map((ex, i) => <ExCard key={ex.id} ex={ex} idx={i} variant="main" logData={workoutLog[ex.id]?.sets || []} onUpdateSet={(si, f, v) => updateSet(ex.id, si, f, v)} onToggleSet={(si) => toggleSet(ex.id, si, ex.restSeconds)} onMarkDone={(si) => markSetDone(ex.id, si)} onTapName={(name) => openTracker(name, "workout")} />)}</>)}
+      {activeDay.cooldown?.length > 0 && (<><p style={{ ...S.label, color: "#00C2A8", marginBottom: 10, marginTop: 16 }}>{"\u{1F319}"} Cool-down</p>{activeDay.cooldown.map((ex, i) => <ExCard key={ex.id} ex={ex} idx={i} variant="cooldown" logData={workoutLog[ex.id]?.sets || []} onUpdateSet={(si, f, v) => updateSet(ex.id, si, f, v)} onToggleSet={(si) => toggleSet(ex.id, si, ex.restSeconds)} onMarkDone={(si) => markSetDone(ex.id, si)} onTapName={(name) => openTracker(name, "workout")} />)}</>)}
       <div style={{ background: "#111", borderRadius: 16, border: "1px solid #1E1E1E", padding: "18px 16px", marginTop: 20 }}><p style={{ ...S.label, marginBottom: 12 }}>How did that feel?</p><div style={{ display: "flex", gap: 6, marginBottom: 14 }}>{FEELING_OPTIONS.map(f => (<button key={f.value} className="pr" onClick={() => setWorkoutFeeling(f.value)} style={{ flex: 1, padding: "10px 4px", borderRadius: 12, background: workoutFeeling === f.value ? f.color + "25" : "#0A0A0A", border: `2px solid ${workoutFeeling === f.value ? f.color : "#1E1E1E"}`, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}><span style={{ fontSize: 22 }}>{f.icon}</span><span style={{ ...S.body, fontSize: 9, fontWeight: 700, color: workoutFeeling === f.value ? f.color : "#444" }}>{f.label}</span></button>))}</div><textarea placeholder="Notes (optional)..." value={workoutNotes} onChange={e => setWorkoutNotes(e.target.value)} style={{ width: "100%", background: "#0A0A0A", border: "1px solid #1E1E1E", borderRadius: 10, color: "#F0EDE8", padding: "10px 14px", fontSize: 13, fontFamily: "'DM Sans',sans-serif", outline: "none", resize: "none", minHeight: 60 }} /></div>
       <button className="pr" onClick={finishWorkout} style={{ width: "100%", padding: 16, background: ACCENT, border: "none", borderRadius: 14, color: "#fff", fontFamily: "'Bebas Neue',sans-serif", fontSize: 22, letterSpacing: 2, cursor: "pointer", marginTop: 16 }}>FINISH WORKOUT</button>
     </div></div>)}
 
-    {view === "history" && (<div style={{ paddingBottom: 90 }}><div style={{ padding: "52px 24px 20px" }}><h2 style={{ fontSize: 38, letterSpacing: 2 }}>HISTORY</h2><p style={{ ...S.body, fontSize: 13, color: "#555", marginTop: 4 }}>{workoutLogs.length} sessions logged</p></div><div style={{ padding: "0 24px" }}>{workoutLogs.length === 0 ? (<div style={{ textAlign: "center", padding: "60px 0", color: "#2E2E2E" }}><p style={{ fontSize: 48 }}>{"\u{1F4CA}"}</p><p style={{ ...S.body, marginTop: 14, fontSize: 14 }}>Complete your first workout to see it here</p></div>) : (<>{<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>{[["Sessions", workoutLogs.length], ["Total Sets", workoutLogs.reduce((a, l) => a + l.completedSets, 0)]].map(([label, val]) => (<div key={label} style={{ background: "#111", borderRadius: 12, padding: "12px 14px", border: "1px solid #1E1E1E" }}><p style={{ ...S.label, fontSize: 8, marginBottom: 4 }}>{label}</p><p style={{ fontSize: 28, letterSpacing: 1 }}>{val}</p></div>))}</div>}{workoutLogs.map((log, i) => (<div key={log.id} className="su pr" style={{ animationDelay: `${i * 0.04}s`, background: "#111", borderRadius: 14, border: "1px solid #1E1E1E", padding: "13px 16px", marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }} onClick={() => { setDetailLog(log); setView("log-detail"); }}><div><p style={{ fontSize: 20, letterSpacing: 1 }}>{log.dayLabel}</p><p style={{ ...S.body, fontSize: 11, color: "#555", marginTop: 2 }}>{log.date} {"\u00B7"} {log.programName}</p></div><div style={{ textAlign: "right" }}><span style={{ fontSize: 22 }}>{FEELING_OPTIONS.find(f => f.value === log.feeling)?.icon || "\u{1F4AA}"}</span><p style={{ ...S.body, fontSize: 10, color: "#555" }}>{log.completedSets}/{log.totalSets} sets</p></div></div>))}</>)}</div></div>)}
+    {view === "history" && (<div style={{ paddingBottom: 90 }}><div style={{ padding: "52px 24px 20px" }}><h2 style={{ fontSize: 38, letterSpacing: 2 }}>HISTORY</h2><p style={{ ...S.body, fontSize: 13, color: "#555", marginTop: 4 }}>{workoutLogs.length} sessions logged</p></div><div style={{ padding: "0 24px" }}>{workoutLogs.length === 0 ? (<div style={{ textAlign: "center", padding: "60px 0", color: "#2E2E2E" }}><p style={{ fontSize: 48 }}>{"\u{1F4CA}"}</p><p style={{ ...S.body, marginTop: 14, fontSize: 14 }}>Complete your first workout to see it here</p></div>) : (<>
+      {/* Stats Row */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 16 }}>
+        {[["Sessions", workoutLogs.length], ["Total Sets", workoutLogs.reduce((a, l) => a + (l.completedSets || 0), 0)], ["Avg Feeling", workoutLogs.length ? (workoutLogs.reduce((a, l) => a + (l.feeling || 0), 0) / workoutLogs.length).toFixed(1) : "\u2014"]].map(([label, val]) => (<div key={label} style={{ background: "#111", borderRadius: 12, padding: "12px 10px", border: "1px solid #1E1E1E", textAlign: "center" }}><p style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 26, color: ACCENT }}>{val}</p><p style={{ ...S.label, fontSize: 7 }}>{label}</p></div>))}
+      </div>
 
-    {view === "log-detail" && detailLog && (<div style={{ paddingBottom: 90 }}><div style={{ padding: "52px 24px 20px" }}><button onClick={() => setView("history")} style={S.backBtn}>{"\u2190"} Back</button><h2 style={{ fontSize: 32, letterSpacing: 2 }}>{detailLog.dayLabel}</h2><p style={{ ...S.body, fontSize: 13, color: "#555", marginTop: 4 }}>{detailLog.date} {"\u00B7"} {detailLog.phaseName}</p></div><div style={{ padding: "0 24px" }}><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}><div style={{ background: "#111", borderRadius: 12, padding: "12px", textAlign: "center", border: "1px solid #1E1E1E" }}><p style={{ fontSize: 28 }}>{detailLog.completedSets}</p><p style={{ ...S.label, fontSize: 8 }}>Sets Done</p></div><div style={{ background: "#111", borderRadius: 12, padding: "12px", textAlign: "center", border: "1px solid #1E1E1E" }}><span style={{ fontSize: 28 }}>{FEELING_OPTIONS.find(f => f.value === detailLog.feeling)?.icon || "\u{1F4AA}"}</span><p style={{ ...S.label, fontSize: 8 }}>Feeling</p></div><div style={{ background: "#111", borderRadius: 12, padding: "12px", textAlign: "center", border: "1px solid #1E1E1E" }}><p style={{ fontSize: 28 }}>{detailLog.totalSets}</p><p style={{ ...S.label, fontSize: 8 }}>Total</p></div></div>{detailLog.notes && <div style={{ background: "#111", borderRadius: 12, padding: "12px 16px", border: "1px solid #1E1E1E", marginBottom: 16 }}><p style={{ ...S.label, marginBottom: 6 }}>Notes</p><p style={{ ...S.body, fontSize: 13, color: "#999", lineHeight: 1.5 }}>{detailLog.notes}</p></div>}<div style={{ background: "#111", borderRadius: 16, border: "1px solid #1E1E1E", overflow: "hidden" }}>{detailLog.exercises.map((ex, i) => (<div key={i} style={{ padding: "12px 16px", borderBottom: "1px solid #1A1A1A" }}><p style={{ fontSize: 18, letterSpacing: 1, marginBottom: 6 }}>{ex.name}</p>{ex.sets.map((s, si) => (<p key={si} style={{ ...S.body, fontSize: 12, color: s.done ? "#888" : "#444", padding: "2px 0" }}>Set {si + 1}: {s.reps || "\u2014"} reps {s.weight ? `\u00D7 ${s.weight}` : ""} {s.done ? "\u2713" : "\u2014"}</p>))}</div>))}</div></div></div>)}
+      {/* Exercise Weight Summary */}
+      {allExerciseNames.length > 0 && (<>
+        <p style={{ ...S.label, marginBottom: 10 }}>Exercise Progress</p>
+        <div style={{ background: "#111", borderRadius: 14, border: "1px solid #1E1E1E", overflow: "hidden", marginBottom: 16 }}>
+          {allExerciseNames.map((name, i) => {
+            const s = exerciseWeightSummary[name] || {};
+            return (<div key={name} className="pr" onClick={() => openTracker(name, "history")} style={{ padding: "11px 14px", borderBottom: i < allExerciseNames.length - 1 ? "1px solid #1A1A1A" : "none", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
+              <div><p style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 16, letterSpacing: 0.5 }}>{name}</p><p style={{ ...S.body, fontSize: 10, color: "#555" }}>{s.sessions || 0} sessions {"\u00B7"} {s.totalSets || 0} sets</p></div>
+              <div style={{ textAlign: "right" }}><p style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 20, color: ACCENT }}>{s.maxWeight || "\u2014"}</p><p style={{ ...S.label, fontSize: 7 }}>Best</p></div>
+            </div>);
+          })}
+        </div>
+      </>)}
+
+      {/* Session List */}
+      <p style={{ ...S.label, marginBottom: 10 }}>All Sessions</p>
+      {workoutLogs.map((log, i) => (<div key={log.id} className="su pr" style={{ animationDelay: `${i * 0.04}s`, background: "#111", borderRadius: 14, border: "1px solid #1E1E1E", padding: "13px 16px", marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }} onClick={() => { setDetailLog(log); setView("log-detail"); }}><div><p style={{ fontSize: 20, letterSpacing: 1 }}>{log.dayLabel}</p><p style={{ ...S.body, fontSize: 11, color: "#555", marginTop: 2 }}>{log.date} {"\u00B7"} {log.programName}</p></div><div style={{ textAlign: "right" }}><span style={{ fontSize: 22 }}>{FEELING_OPTIONS.find(f => f.value === log.feeling)?.icon || "\u{1F4AA}"}</span><p style={{ ...S.body, fontSize: 10, color: "#555" }}>{log.completedSets}/{log.totalSets} sets</p></div></div>))}
+    </>)}</div></div>)}
+
+    {/* ═══ EXERCISE TRACKER ═══ */}
+    {view === "tracker" && trackerExercise && (() => {
+      const history = getExerciseHistory(trackerExercise);
+      const summary = exerciseWeightSummary[trackerExercise] || {};
+      const maxWeight = summary.maxWeight || 0;
+      // Group by date for the bar chart
+      const byDate = {};
+      history.forEach(h => { if (!byDate[h.date]) byDate[h.date] = []; byDate[h.date].push(h); });
+      const dateKeys = Object.keys(byDate).sort();
+      const chartData = dateKeys.slice(-10).map(d => ({ date: d, maxW: Math.max(...byDate[d].map(e => e.weight || 0)) }));
+      const chartMax = chartData.length ? Math.max(...chartData.map(c => c.maxW)) : 1;
+      const chartMin = chartData.length ? Math.min(...chartData.filter(c => c.maxW > 0).map(c => c.maxW)) : 0;
+
+      return (<div style={{ paddingBottom: 90 }}>
+        <div style={{ padding: "52px 24px 20px" }}>
+          <button onClick={() => setView(prevView || "history")} style={S.backBtn}>{"\u2190"} Back</button>
+          <h2 style={{ fontSize: 32, letterSpacing: 2 }}>{trackerExercise.toUpperCase()}</h2>
+          <p style={{ ...S.body, fontSize: 13, color: "#555", marginTop: 4 }}>{summary.sessions || 0} sessions {"\u00B7"} {summary.totalSets || 0} total sets</p>
+        </div>
+        <div style={{ padding: "0 24px" }}>
+          {/* Best Weight */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
+            <div style={{ background: "#111", borderRadius: 12, padding: "14px", textAlign: "center", border: "1px solid #1E1E1E" }}>
+              <p style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 36, color: ACCENT }}>{maxWeight || "\u2014"}</p>
+              <p style={{ ...S.label, fontSize: 8 }}>All-Time Best</p>
+            </div>
+            <div style={{ background: "#111", borderRadius: 12, padding: "14px", textAlign: "center", border: "1px solid #1E1E1E" }}>
+              <p style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 36, color: "#00C2A8" }}>{getAutoWeight(trackerExercise) || "\u2014"}</p>
+              <p style={{ ...S.label, fontSize: 8 }}>Suggested Next</p>
+            </div>
+          </div>
+
+          {/* Bar Chart */}
+          {chartData.length > 0 && (<div style={{ background: "#111", borderRadius: 14, padding: 16, border: "1px solid #1E1E1E", marginBottom: 16 }}>
+            <p style={{ ...S.label, marginBottom: 12, fontSize: 9 }}>Weight Over Time</p>
+            <div style={{ height: 120, display: "flex", alignItems: "flex-end", gap: 5 }}>
+              {chartData.map((c, i) => {
+                const range = chartMax - chartMin || 1;
+                const h = ((c.maxW - chartMin) / range) * 80 + 25;
+                return (<div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                  <p style={{ ...S.body, fontSize: 8, color: "#666" }}>{c.maxW}</p>
+                  <div style={{ width: "100%", height: h, background: i === chartData.length - 1 ? ACCENT : ACCENT + "44", borderRadius: "4px 4px 0 0", transition: "height 0.5s" }} />
+                  <p style={{ ...S.body, fontSize: 7, color: "#333" }}>{c.date.slice(5)}</p>
+                </div>);
+              })}
+            </div>
+          </div>)}
+
+          {/* All Sets Log */}
+          <p style={{ ...S.label, marginBottom: 10 }}>All Sets Logged</p>
+          <div style={{ background: "#111", borderRadius: 14, border: "1px solid #1E1E1E", overflow: "hidden" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 50px 50px 40px", padding: "9px 14px", borderBottom: "1px solid #1A1A1A" }}>
+              {["Date", "Weight", "Reps", "Set"].map(h => <p key={h} style={{ ...S.label, fontSize: 8 }}>{h}</p>)}
+            </div>
+            {history.map((h, i) => (
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 50px 50px 40px", padding: "8px 14px", borderBottom: "1px solid #131313" }}>
+                <p style={{ ...S.body, fontSize: 11, color: "#888" }}>{h.date.slice(5)}</p>
+                <p style={{ ...S.body, fontSize: 12, fontWeight: 700, color: h.weight === maxWeight ? ACCENT : "#F0EDE8" }}>{h.weight || "\u2014"}</p>
+                <p style={{ ...S.body, fontSize: 12, color: "#666" }}>{h.reps}</p>
+                <p style={{ ...S.body, fontSize: 11, color: "#555" }}>#{h.setNum}</p>
+              </div>
+            ))}
+            {history.length === 0 && <p style={{ ...S.body, fontSize: 13, color: "#333", padding: 20, textAlign: "center" }}>No sets logged yet</p>}
+          </div>
+        </div>
+      </div>);
+    })()}
+
+    {view === "log-detail" && detailLog && (<div style={{ paddingBottom: 90 }}><div style={{ padding: "52px 24px 20px" }}><button onClick={() => setView("history")} style={S.backBtn}>{"\u2190"} Back</button><h2 style={{ fontSize: 32, letterSpacing: 2 }}>{detailLog.dayLabel}</h2><p style={{ ...S.body, fontSize: 13, color: "#555", marginTop: 4 }}>{detailLog.date} {"\u00B7"} {detailLog.phaseName}</p></div><div style={{ padding: "0 24px" }}><div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}><div style={{ background: "#111", borderRadius: 12, padding: "12px", textAlign: "center", border: "1px solid #1E1E1E" }}><p style={{ fontSize: 28 }}>{detailLog.completedSets}</p><p style={{ ...S.label, fontSize: 8 }}>Sets Done</p></div><div style={{ background: "#111", borderRadius: 12, padding: "12px", textAlign: "center", border: "1px solid #1E1E1E" }}><span style={{ fontSize: 28 }}>{FEELING_OPTIONS.find(f => f.value === detailLog.feeling)?.icon || "\u{1F4AA}"}</span><p style={{ ...S.label, fontSize: 8 }}>Feeling</p></div><div style={{ background: "#111", borderRadius: 12, padding: "12px", textAlign: "center", border: "1px solid #1E1E1E" }}><p style={{ fontSize: 28 }}>{detailLog.totalSets}</p><p style={{ ...S.label, fontSize: 8 }}>Total</p></div></div>{detailLog.notes && <div style={{ background: "#111", borderRadius: 12, padding: "12px 16px", border: "1px solid #1E1E1E", marginBottom: 16 }}><p style={{ ...S.label, marginBottom: 6 }}>Notes</p><p style={{ ...S.body, fontSize: 13, color: "#999", lineHeight: 1.5 }}>{detailLog.notes}</p></div>}<div style={{ background: "#111", borderRadius: 16, border: "1px solid #1E1E1E", overflow: "hidden" }}>{detailLog.exercises.map((ex, i) => (<div key={i} style={{ padding: "12px 16px", borderBottom: "1px solid #1A1A1A" }}><p className="pr" onClick={() => openTracker(ex.name, "log-detail")} style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 18, letterSpacing: 1, marginBottom: 6, cursor: "pointer", textDecoration: "underline", textDecorationColor: ACCENT + "44", textUnderlineOffset: 3 }}>{ex.name}</p>{ex.sets.map((s, si) => (<p key={si} style={{ ...S.body, fontSize: 12, color: s.done ? "#888" : "#444", padding: "2px 0" }}>Set {si + 1}: {s.reps || "\u2014"} reps {s.weight ? `\u00D7 ${s.weight}` : ""} {s.done ? "\u2713" : "\u2014"}</p>))}</div>))}</div></div></div>)}
 
     {view === "settings" && (<div style={{ paddingBottom: 90 }}><div style={{ padding: "52px 24px 20px" }}><h2 style={{ fontSize: 38, letterSpacing: 2 }}>SETTINGS</h2></div><div style={{ padding: "0 24px" }}><div style={{ background: "#111", borderRadius: 16, border: "1px solid #1E1E1E", padding: "18px 16px", marginBottom: 14, display: "flex", alignItems: "center", gap: 14 }}><div style={{ width: 56, height: 56, borderRadius: "50%", background: `linear-gradient(135deg, ${ACCENT}, #FF8A65)`, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", flexShrink: 0 }}>{user.photoURL ? <img src={user.photoURL} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 22, fontWeight: 700 }}>{(user.displayName || "?")[0]}</span>}</div><div><p style={{ fontSize: 22, letterSpacing: 1 }}>{user.displayName}</p><p style={{ ...S.body, fontSize: 12, color: "#555" }}>{user.email}</p></div></div><button className="pr" onClick={async () => { await logOut(); setUser(null); }} style={{ width: "100%", padding: 14, background: ACCENT + "18", border: `1px solid ${ACCENT}44`, borderRadius: 14, color: ACCENT, ...S.body, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>Sign Out</button></div></div>)}
 
-    {view !== "workout" && (<div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 430, background: "#0C0C0C", borderTop: "1px solid #181818", display: "flex", padding: "10px 0 22px", zIndex: 50 }}>{[{ label: "Today", icon: "\u{1F3E0}", v: "home" }, { label: "History", icon: "\u{1F4CA}", v: "history" }, { label: "Settings", icon: "\u2699\uFE0F", v: "settings" }].map(item => (<button key={item.v} onClick={() => { setView(item.v); setDetailLog(null); }} style={{ flex: 1, background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "6px 0", cursor: "pointer" }}><span style={{ fontSize: 20 }}>{item.icon}</span><span style={{ ...S.body, fontSize: 10, fontWeight: 700, color: view === item.v || (item.v === "history" && view === "log-detail") ? ACCENT : "#333", letterSpacing: "0.06em", textTransform: "uppercase" }}>{item.label}</span>{(view === item.v || (item.v === "history" && view === "log-detail")) && <div style={{ width: 18, height: 2, background: ACCENT, borderRadius: 1 }} />}</button>))}</div>)}
+    {view !== "workout" && (<div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 430, background: "#0C0C0C", borderTop: "1px solid #181818", display: "flex", padding: "10px 0 22px", zIndex: 50 }}>{[{ label: "Today", icon: "\u{1F3E0}", v: "home" }, { label: "History", icon: "\u{1F4CA}", v: "history" }, { label: "Settings", icon: "\u2699\uFE0F", v: "settings" }].map(item => (<button key={item.v} onClick={() => { setView(item.v); setDetailLog(null); setTrackerExercise(null); }} style={{ flex: 1, background: "none", border: "none", display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "6px 0", cursor: "pointer" }}><span style={{ fontSize: 20 }}>{item.icon}</span><span style={{ ...S.body, fontSize: 10, fontWeight: 700, color: view === item.v || (item.v === "history" && (view === "log-detail" || view === "tracker")) ? ACCENT : "#333", letterSpacing: "0.06em", textTransform: "uppercase" }}>{item.label}</span>{(view === item.v || (item.v === "history" && (view === "log-detail" || view === "tracker"))) && <div style={{ width: 18, height: 2, background: ACCENT, borderRadius: 1 }} />}</button>))}</div>)}
   </div>);
 }
