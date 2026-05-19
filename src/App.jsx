@@ -11,11 +11,11 @@ import {
 // ─── Firebase Config ────────────────────────────────────────────────────────
 const firebaseConfig = {
   apiKey: "AIzaSyDwCIb6OQ40TDNlNr1TjxO4kZVf2Ho62X8",
-  authDomain: "framewerks-dashboard.firebaseapp.com",
+  authDomain: "framewerks-coach.firebaseapp.com",
   projectId: "framewerks-coach",
   storageBucket: "framewerks-coach.firebaseapp.com",
-  messagingSenderId: "878987259944",
-  appId: "1:878987259944:web:38bc7c9e3e5e28d2877c9b"
+  messagingSenderId: "850336233136",
+  appId: "1:850336233136:web:2bf59afb82672435c4ed75"
 };
 
 const app = initializeApp(firebaseConfig);
