@@ -3,12 +3,12 @@ import { getFirestore, doc, setDoc, getDoc, collection, getDocs, deleteDoc, quer
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyC6mtaBP6B4Jf7515VO9s1Z9dstYPY_5ew",
-  authDomain: "framewerks-dashboard.firebaseapp.com",
-  projectId: "framewerks-dashboard",
-  storageBucket: "framewerks-dashboard.firebasestorage.app",
-  messagingSenderId: "838679216503",
-  appId: "1:838679216503:web:04eaca225681ee43e1e172",
+  apiKey: "AIzaSyDwCIb6OQ40TDNlNr1TjxO4kZVf2Ho62X8",
+  authDomain: "framewerks-coach.firebaseapp.com",
+  projectId: "framewerks-coach",
+  storageBucket: "framewerks-coach.firebasestorage.app",
+  messagingSenderId: "850336233136",
+  appId: "1:850336233136:web:2bf59afb82672435c4ed75",
 };
 
 const app = initializeApp(firebaseConfig);
@@ -71,14 +71,33 @@ export async function saveWorkoutLog(log) {
 }
 
 export async function loadWorkoutLogs(userId) {
-  const q = query(
-    collection(db, "workoutLogs"),
-    where("userId", "==", userId),
-    orderBy("date", "desc"),
-    limit(100)
-  );
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map((d) => d.data());
+  try {
+    // Try indexed query first
+    const q = query(
+      collection(db, "workoutLogs"),
+      where("userId", "==", userId),
+      orderBy("date", "desc"),
+      limit(100)
+    );
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((d) => d.data());
+  } catch (err) {
+    console.warn("Indexed query failed, using fallback:", err.message);
+    // Fallback: query without orderBy (doesn't need composite index)
+    try {
+      const q = query(
+        collection(db, "workoutLogs"),
+        where("userId", "==", userId),
+        limit(100)
+      );
+      const snapshot = await getDocs(q);
+      const results = snapshot.docs.map((d) => d.data());
+      return results.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    } catch (err2) {
+      console.error("Workout log load failed:", err2);
+      return [];
+    }
+  }
 }
 
 // ─── Habits ─────────────────────────────────────────────────────
@@ -88,14 +107,31 @@ export async function saveHabitEntry(entry) {
 }
 
 export async function loadHabitEntries(userId) {
-  const q = query(
-    collection(db, "habits"),
-    where("userId", "==", userId),
-    orderBy("date", "desc"),
-    limit(60)
-  );
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map((d) => d.data());
+  try {
+    const q = query(
+      collection(db, "habits"),
+      where("userId", "==", userId),
+      orderBy("date", "desc"),
+      limit(60)
+    );
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map((d) => d.data());
+  } catch (err) {
+    console.warn("Indexed habit query failed, using fallback:", err.message);
+    try {
+      const q = query(
+        collection(db, "habits"),
+        where("userId", "==", userId),
+        limit(60)
+      );
+      const snapshot = await getDocs(q);
+      const results = snapshot.docs.map((d) => d.data());
+      return results.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    } catch (err2) {
+      console.error("Habit load failed:", err2);
+      return [];
+    }
+  }
 }
 
 export { db, auth };
