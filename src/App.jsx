@@ -13,7 +13,7 @@ const firebaseConfig = {
   apiKey: "AIzaSyDwCIb6OQ40TDNlNr1TjxO4kZVf2Ho62X8",
   authDomain: "framewerks-dashboard.firebaseapp.com",
   projectId: "framewerks-coach",
-  storageBucket: "framewerks-dashboard.firebasestorage.app",
+  storageBucket: "framewerks-coach.firebaseapp.com",
   messagingSenderId: "878987259944",
   appId: "1:878987259944:web:38bc7c9e3e5e28d2877c9b"
 };
