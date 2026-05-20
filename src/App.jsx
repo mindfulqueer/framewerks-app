@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import {
   getFirestore, collection, query, where, orderBy, getDocs,
-  addDoc, updateDoc, doc, onSnapshot, serverTimestamp, setDoc
+  addDoc, updateDoc, doc, onSnapshot, serverTimestamp, setDoc, getDoc
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import {
   getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut
@@ -13,7 +13,7 @@ const firebaseConfig = {
   apiKey: "AIzaSyDwCIb6OQ40TDNlNr1TjxO4kZVf2Ho62X8",
   authDomain: "framewerks-coach.firebaseapp.com",
   projectId: "framewerks-coach",
-  storageBucket: "framewerks-coach.firebaseapp.com",
+  storageBucket: "framewerks-coach.firebasestorage.app",
   messagingSenderId: "850336233136",
   appId: "1:850336233136:web:2bf59afb82672435c4ed75"
 };
@@ -81,6 +81,7 @@ const C = {
   accent: "#E8FF00",       // electric yellow-green
   accentAlt: "#FF3D3D",    // hot red
   accentBlue: "#00C8FF",   // electric blue
+  accentOrange: "#FF8C00",  // orange for RPE
   text: "#FFFFFF",
   textMuted: "#888888",
   textDim: "#555555",
@@ -355,10 +356,36 @@ function LoginScreen({ onLogin }) {
   );
 }
 
+// Converts a coach-designed program day into a workout object the ActiveWorkout screen understands
+function dayToWorkout(day) {
+  const exercises = (day.blocks || []).flatMap((block, bi) =>
+    (block.exercises || []).map((ex, ei) => ({
+      id: ex.id || `${bi}_${ei}`,
+      name: ex.name,
+      sets: parseInt(ex.sets) || 3,
+      reps: ex.reps || "8-10",
+      tempo: ex.tempo || "",
+      rpe: ex.rpe || "",
+      rest: ex.rest || "60s",
+      startWeight: ex.startWeight || "",
+      notes: ex.notes || "",
+      blockName: block.name,
+      blockType: block.type,
+    }))
+  );
+  return { id: day.id, name: day.name, exercises };
+}
+
 // ─── Today Tab ────────────────────────────────────────────────────────────────
-function TodayTab({ user, workoutLogs, onStartWorkout }) {
-  const today = new Date().toLocaleDateString("en-US", { weekday: "long" });
-  const todayWorkout = SAMPLE_PROGRAM.workouts.find(w => w.day === today);
+function TodayTab({ user, workoutLogs, program, onStartWorkout }) {
+  const todayIndex = new Date().getDay(); // 0=Sun
+  // Map today's day to a program day (cycle through days)
+  const days = program?.days || [];
+  // Pick today's day by cycling: Mon=0,Tue=1... skip Sunday
+  const dayOfWeek = todayIndex === 0 ? null : todayIndex - 1;
+  const todayDay = dayOfWeek !== null && days.length > 0 ? days[dayOfWeek % days.length] : null;
+  const todayWorkout = todayDay ? dayToWorkout(todayDay) : null;
+
   const recentLogs = workoutLogs.slice(0, 3);
   const totalWorkouts = workoutLogs.length;
 
@@ -387,7 +414,7 @@ function TodayTab({ user, workoutLogs, onStartWorkout }) {
       <div style={{ display: "flex", gap: 10, marginTop: 24 }}>
         {[
           { label: "WORKOUTS", value: totalWorkouts },
-          { label: "WEEK", value: `${SAMPLE_PROGRAM.phase.split(":")[0]}` },
+          { label: "PROGRAM", value: program ? program.name.split(" ")[0] : "–" },
           { label: "STREAK", value: "–" },
         ].map((stat, i) => (
           <div key={i} style={{
@@ -395,7 +422,7 @@ function TodayTab({ user, workoutLogs, onStartWorkout }) {
             borderRadius: 10, padding: "12px 10px", textAlign: "center",
             border: i === 0 ? "none" : `1px solid ${C.border}`
           }}>
-            <div style={{ fontSize: 28, letterSpacing: "0.02em", color: i === 0 ? "#000" : C.text }}>
+            <div style={{ fontSize: i === 1 ? 18 : 28, letterSpacing: "0.02em", color: i === 0 ? "#000" : C.text }}>
               {stat.value}
             </div>
             <div style={{ fontSize: 9, fontFamily: "system-ui", fontWeight: 700, letterSpacing: "0.15em", color: i === 0 ? "#000" : C.textMuted, marginTop: 2 }}>
@@ -413,7 +440,7 @@ function TodayTab({ user, workoutLogs, onStartWorkout }) {
               <span style={styles.pill(C.accent)}>TODAY</span>
               <div style={{ fontSize: 28, marginTop: 6 }}>{todayWorkout.name}</div>
               <div style={{ fontSize: 12, fontFamily: "system-ui", color: C.textMuted, marginTop: 2 }}>
-                {todayWorkout.exercises.length} exercises · {SAMPLE_PROGRAM.phase}
+                {todayWorkout.exercises.length} exercises · {program?.name}
               </div>
             </div>
             <div style={{ fontSize: 36, opacity: 0.15 }}>💪</div>
@@ -601,6 +628,29 @@ function ActiveWorkout({ user, workout, onComplete, onCancel }) {
             </div>
             <span style={styles.pill(C.accent)}>EX {currentExIdx + 1}/{workout.exercises.length}</span>
           </div>
+          {/* Coach-prescribed details */}
+          <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+            {ex.tempo && (
+              <div style={{ background: C.surface, borderRadius: 6, padding: "4px 10px", fontSize: 11, fontFamily: "system-ui", color: C.textMuted }}>
+                ⏱ Tempo: <span style={{ color: C.text }}>{ex.tempo}</span>
+              </div>
+            )}
+            {ex.rpe && (
+              <div style={{ background: C.surface, borderRadius: 6, padding: "4px 10px", fontSize: 11, fontFamily: "system-ui", color: C.textMuted }}>
+                RPE: <span style={{ color: C.accentOrange }}>{ex.rpe}</span>
+              </div>
+            )}
+            {ex.rest && (
+              <div style={{ background: C.surface, borderRadius: 6, padding: "4px 10px", fontSize: 11, fontFamily: "system-ui", color: C.textMuted }}>
+                Rest: <span style={{ color: C.text }}>{ex.rest}</span>
+              </div>
+            )}
+            {ex.startWeight && (
+              <div style={{ background: C.surface, borderRadius: 6, padding: "4px 10px", fontSize: 11, fontFamily: "system-ui", color: C.textMuted }}>
+                Start: <span style={{ color: C.accentBlue }}>{ex.startWeight}</span>
+              </div>
+            )}
+          </div>
           {ex.notes && (
             <div style={{ fontSize: 12, fontFamily: "system-ui", color: C.accentBlue, marginTop: 8, fontStyle: "italic" }}>
               💡 {ex.notes}
@@ -724,58 +774,145 @@ function ActiveWorkout({ user, workout, onComplete, onCancel }) {
 }
 
 // ─── Program Tab ──────────────────────────────────────────────────────────────
-function ProgramTab({ onStartWorkout }) {
+function ProgramTab({ program, onStartWorkout }) {
   const [expanded, setExpanded] = useState(null);
+
+  // No program assigned yet
+  if (!program) {
+    return (
+      <div>
+        <div style={styles.sectionTitle}>PROGRAM</div>
+        <div style={{ ...styles.card, textAlign: "center", padding: "48px 16px", marginTop: 20 }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>📋</div>
+          <div style={{ fontSize: 22 }}>NO PROGRAM YET</div>
+          <div style={{ fontSize: 12, fontFamily: "system-ui", color: C.textMuted, marginTop: 8, lineHeight: 1.6 }}>
+            Your coach hasn't assigned a program yet.{"
+"}Check back soon.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const days = program.days || [];
 
   return (
     <div>
       <div style={styles.sectionTitle}>PROGRAM</div>
       <div style={{ fontSize: 12, fontFamily: "system-ui", color: C.textMuted, marginBottom: 4 }}>
-        {SAMPLE_PROGRAM.name}
+        {program.name}
       </div>
-      <div style={{ ...styles.pill(C.accent), marginBottom: 20 }}>{SAMPLE_PROGRAM.phase}</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
+        <span style={styles.pill(C.accent)}>{program.weeks} WEEKS</span>
+        <span style={styles.pill(C.accentBlue)}>{days.length} DAYS</span>
+      </div>
 
-      {SAMPLE_PROGRAM.workouts.map((workout, i) => (
-        <div key={workout.id} style={styles.card}>
-          <div
-            onClick={() => setExpanded(expanded === workout.id ? null : workout.id)}
-            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
-          >
-            <div>
-              <div style={{ fontSize: 10, fontFamily: "system-ui", color: C.textMuted, fontWeight: 700, letterSpacing: "0.1em" }}>
-                {workout.day.toUpperCase()}
-              </div>
-              <div style={{ fontSize: 24, marginTop: 2 }}>{workout.name}</div>
-              <div style={{ fontSize: 11, fontFamily: "system-ui", color: C.textMuted }}>
-                {workout.exercises.length} exercises
-              </div>
-            </div>
-            <div style={{ fontSize: 24, color: C.textDim, transition: "transform 0.2s", transform: expanded === workout.id ? "rotate(180deg)" : "none" }}>
-              ↓
-            </div>
-          </div>
+      {days.map((day, i) => {
+        const workout = dayToWorkout(day);
+        const totalExercises = workout.exercises.length;
+        const isExpanded = expanded === day.id;
 
-          {expanded === workout.id && (
-            <div style={{ marginTop: 16, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
-              {workout.exercises.map((ex, ei) => (
-                <div key={ex.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 16, fontFamily: "'Bebas Neue'" }}>{ex.name}</div>
-                    {ex.notes && <div style={{ fontSize: 11, fontFamily: "system-ui", color: C.textMuted, fontStyle: "italic" }}>{ex.notes}</div>}
-                  </div>
-                  <div style={{ fontSize: 12, fontFamily: "system-ui", color: C.textMuted, textAlign: "right" }}>
-                    <div>{ex.sets} sets</div>
-                    <div>{ex.reps} reps</div>
-                  </div>
+        return (
+          <div key={day.id} style={styles.card}>
+            <div
+              onClick={() => setExpanded(isExpanded ? null : day.id)}
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
+            >
+              <div>
+                <div style={{ fontSize: 10, fontFamily: "system-ui", color: C.textMuted, fontWeight: 700, letterSpacing: "0.1em" }}>
+                  DAY {i + 1}
                 </div>
-              ))}
-              <button onClick={() => onStartWorkout(workout)} style={{ ...styles.btn("primary"), width: "100%", marginTop: 8 }}>
-                START THIS WORKOUT
-              </button>
+                <div style={{ fontSize: 24, marginTop: 2 }}>{day.name}</div>
+                <div style={{ fontSize: 11, fontFamily: "system-ui", color: C.textMuted }}>
+                  {totalExercises} exercises
+                  {day.blocks?.length > 0 ? ` · ${day.blocks.length} blocks` : ""}
+                </div>
+              </div>
+              <div style={{ fontSize: 24, color: C.textDim, transition: "transform 0.2s", transform: isExpanded ? "rotate(180deg)" : "none" }}>
+                ↓
+              </div>
             </div>
-          )}
-        </div>
-      ))}
+
+            {isExpanded && (
+              <div style={{ marginTop: 16, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
+                {/* Warm up */}
+                {day.warmup?.length > 0 && (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 11, fontFamily: "system-ui", color: C.accentOrange, fontWeight: 700, letterSpacing: "0.1em", marginBottom: 8 }}>🔥 WARM UP</div>
+                    {day.warmup.map((ex, wi) => (
+                      <div key={ex.id || wi} style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                        <div style={{ fontSize: 14, fontFamily: "system-ui", color: C.text }}>{ex.name}</div>
+                        <div style={{ fontSize: 12, fontFamily: "system-ui", color: C.textMuted }}>{ex.duration}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Training blocks */}
+                {day.blocks?.map((block, bi) => (
+                  <div key={block.id || bi} style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 11, fontFamily: "system-ui", color: C.accent, fontWeight: 700, letterSpacing: "0.1em", marginBottom: 8 }}>
+                      💪 {block.name?.toUpperCase()} — {block.type?.toUpperCase()}
+                    </div>
+                    {block.exercises?.map((ex, ei) => {
+                      const label = `${String.fromCharCode(65 + bi)}${ei + 1}`;
+                      return (
+                        <div key={ex.id || ei} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10, paddingLeft: 8, borderLeft: `2px solid ${C.border}` }}>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <span style={{ fontSize: 12, fontFamily: "system-ui", color: C.accent, fontWeight: 700 }}>{label}</span>
+                              <span style={{ fontSize: 15, fontFamily: "'Bebas Neue'" }}>{ex.name}</span>
+                            </div>
+                            <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+                              {ex.tempo && <span style={{ fontSize: 10, fontFamily: "system-ui", color: C.textMuted }}>⏱ {ex.tempo}</span>}
+                              {ex.rpe && <span style={{ fontSize: 10, fontFamily: "system-ui", color: C.accentOrange }}>RPE {ex.rpe}</span>}
+                              {ex.rest && <span style={{ fontSize: 10, fontFamily: "system-ui", color: C.textMuted }}>Rest {ex.rest}</span>}
+                              {ex.startWeight && <span style={{ fontSize: 10, fontFamily: "system-ui", color: C.accentBlue }}>Start: {ex.startWeight}</span>}
+                            </div>
+                            {ex.notes && <div style={{ fontSize: 11, fontFamily: "system-ui", color: C.accentBlue, fontStyle: "italic", marginTop: 2 }}>💡 {ex.notes}</div>}
+                          </div>
+                          <div style={{ fontSize: 12, fontFamily: "system-ui", color: C.textMuted, textAlign: "right", flexShrink: 0, marginLeft: 12 }}>
+                            <div>{ex.sets} sets</div>
+                            <div>{ex.reps}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+
+                {/* Cool down */}
+                {(day.cooldown?.exercises?.length > 0 || day.cooldown?.breathing?.pattern) && (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 11, fontFamily: "system-ui", color: C.accentBlue, fontWeight: 700, letterSpacing: "0.1em", marginBottom: 8 }}>🧘 COOL DOWN</div>
+                    {day.cooldown?.exercises?.map((ex, ci) => (
+                      <div key={ex.id || ci} style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                        <div style={{ fontSize: 14, fontFamily: "system-ui", color: C.text }}>{ex.name}</div>
+                        <div style={{ fontSize: 12, fontFamily: "system-ui", color: C.textMuted }}>{ex.duration}</div>
+                      </div>
+                    ))}
+                    {day.cooldown?.breathing?.pattern && (
+                      <div style={{ background: C.surface, borderRadius: 8, padding: "10px 12px", marginTop: 8 }}>
+                        <div style={{ fontSize: 10, fontFamily: "system-ui", color: C.accentBlue, fontWeight: 700, letterSpacing: "0.1em", marginBottom: 4 }}>BREATHING PATTERN</div>
+                        <div style={{ fontSize: 18, fontFamily: "'Bebas Neue'", color: C.accentBlue, letterSpacing: "0.2em" }}>
+                          {day.cooldown.breathing.pattern}
+                        </div>
+                        {day.cooldown.breathing.notes && (
+                          <div style={{ fontSize: 11, fontFamily: "system-ui", color: C.textMuted, marginTop: 4 }}>{day.cooldown.breathing.notes}</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <button onClick={() => onStartWorkout(workout)} style={{ ...styles.btn("primary"), width: "100%", marginTop: 8 }}>
+                  START DAY {i + 1}
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1087,7 +1224,7 @@ function ProgressTab({ workoutLogs }) {
 }
 
 // ─── Profile Tab ──────────────────────────────────────────────────────────────
-function ProfileTab({ user, onSignOut }) {
+function ProfileTab({ user, program, onSignOut }) {
   const [wellbeing, setWellbeing] = useState(() => loadLocal(KEYS.WELLBEING, {}));
   const todayKey = new Date().toISOString().slice(0, 10);
   const todayWellbeing = wellbeing[todayKey] || {};
@@ -1156,8 +1293,8 @@ function ProfileTab({ user, onSignOut }) {
 
       <div style={{ marginTop: 24, paddingTop: 20, borderTop: `1px solid ${C.border}` }}>
         <div style={{ fontSize: 14, fontFamily: "system-ui", color: C.textMuted, marginBottom: 4 }}>CURRENT PROGRAM</div>
-        <div style={{ fontSize: 20, marginBottom: 2 }}>{SAMPLE_PROGRAM.name}</div>
-        <div style={{ fontSize: 12, fontFamily: "system-ui", color: C.textMuted }}>{SAMPLE_PROGRAM.phase}</div>
+        <div style={{ fontSize: 20, marginBottom: 2 }}>{program?.name || "No program assigned"}</div>
+        <div style={{ fontSize: 12, fontFamily: "system-ui", color: C.textMuted }}>{program ? `${program.weeks} weeks · ${program.days?.length || 0} days` : "Ask your coach to assign a program"}</div>
       </div>
 
       <button onClick={onSignOut} style={{ ...styles.btn("ghost"), width: "100%", marginTop: 24, color: C.accentAlt, borderColor: C.accentAlt + "44" }}>
@@ -1174,6 +1311,8 @@ export default function App() {
   const [tab, setTab] = useState("today");
   const [activeWorkout, setActiveWorkout] = useState(null);
   const [workoutLogs, setWorkoutLogs] = useState(() => loadLocal(KEYS.WORKOUT_LOGS, []));
+  const [assignedProgram, setAssignedProgram] = useState(null);
+  const [programLoading, setProgramLoading] = useState(false);
 
   // Auth listener
   useEffect(() => {
@@ -1184,9 +1323,11 @@ export default function App() {
     return unsub;
   }, []);
 
-  // Load Firebase logs when user logs in
+  // Load assigned program + workout logs when user logs in
   useEffect(() => {
     if (!user) return;
+
+    // Load workout logs
     loadAllWorkoutLogs(user.uid).then(logs => {
       if (logs.length > 0) {
         const merged = [...logs, ...loadLocal(KEYS.WORKOUT_LOGS, [])];
@@ -1200,6 +1341,44 @@ export default function App() {
         saveLocal(KEYS.WORKOUT_LOGS, deduped);
       }
     });
+
+    // Find client doc and load assigned program
+    const loadProgram = async () => {
+      setProgramLoading(true);
+      try {
+        // Search clients collection for a doc with matching userId or linkedEmail
+        const { getDocs: _getDocs, query: _query, where: _where, collection: _col, getDoc: _getDoc, doc: _doc } =
+          await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js");
+
+        // Try userId match
+        const q = _query(_col(db, "clients"), _where("userId", "==", user.uid));
+        let snap = await _getDocs(q);
+
+        // Fallback: try linkedEmail match
+        if (snap.empty && user.email) {
+          const q2 = _query(_col(db, "clients"), _where("linkedEmail", "==", user.email));
+          snap = await _getDocs(q2);
+          // If found via email, update userId
+          if (!snap.empty) {
+            const clientDoc = snap.docs[0];
+            await updateDoc(_doc(db, "clients", clientDoc.id), { userId: user.uid });
+          }
+        }
+
+        if (!snap.empty) {
+          const clientData = snap.docs[0].data();
+          if (clientData.assignedProgramId) {
+            const progSnap = await _getDoc(_doc(db, "programs", clientData.assignedProgramId));
+            if (progSnap.exists()) {
+              setAssignedProgram({ id: progSnap.id, ...progSnap.data() });
+            }
+          }
+        }
+      } catch (e) { console.warn("Program load failed:", e); }
+      setProgramLoading(false);
+    };
+
+    loadProgram();
   }, [user]);
 
   const handleWorkoutComplete = (updatedLogs) => {
@@ -1287,12 +1466,12 @@ export default function App() {
 
       {/* Content */}
       <div style={styles.content}>
-        {tab === "today" && <TodayTab user={user} workoutLogs={workoutLogs} onStartWorkout={setActiveWorkout} />}
-        {tab === "program" && <ProgramTab onStartWorkout={setActiveWorkout} />}
+        {tab === "today" && <TodayTab user={user} workoutLogs={workoutLogs} program={assignedProgram} onStartWorkout={setActiveWorkout} />}
+        {tab === "program" && <ProgramTab program={assignedProgram} onStartWorkout={setActiveWorkout} />}
         {tab === "habits" && <HabitsTab user={user} />}
         {tab === "history" && <HistoryTab workoutLogs={workoutLogs} onRefresh={handleRefreshHistory} />}
         {tab === "progress" && <ProgressTab workoutLogs={workoutLogs} />}
-        {tab === "profile" && <ProfileTab user={user} onSignOut={handleSignOut} />}
+        {tab === "profile" && <ProfileTab user={user} program={assignedProgram} onSignOut={handleSignOut} />}
       </div>
 
       {/* Bottom nav */}
