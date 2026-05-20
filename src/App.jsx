@@ -786,8 +786,7 @@ function ProgramTab({ program, onStartWorkout }) {
           <div style={{ fontSize: 40, marginBottom: 12 }}>📋</div>
           <div style={{ fontSize: 22 }}>NO PROGRAM YET</div>
           <div style={{ fontSize: 12, fontFamily: "system-ui", color: C.textMuted, marginTop: 8, lineHeight: 1.6 }}>
-            Your coach hasn't assigned a program yet.{"
-"}Check back soon.
+            Your coach hasn't assigned a program yet. Check back soon.
           </div>
         </div>
       </div>
