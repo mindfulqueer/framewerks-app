@@ -8,7 +8,7 @@ import {
   getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import {
-  getStorage, ref as sRef, uploadBytes, getDownloadURL
+  getStorage, ref as storageRef, uploadBytes, getDownloadURL
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
 
 // ─── Firebase ─────────────────────────────────────────────────────────────────
@@ -80,10 +80,15 @@ const loadWeightLog = async uid => {
 };
 const uploadFile = async (uid,file,path) => {
   try {
-    const r=sRef(storage,`${path}/${uid}/${Date.now()}_${file.name}`);
+    if(!storage) { console.warn("Storage not initialized"); return null; }
+    const r=storageRef(storage,`${path}/${uid}/${Date.now()}_${file.name}`);
     await uploadBytes(r,file);
     return await getDownloadURL(r);
-  } catch(e){ console.warn("Upload error:",e); return null; }
+  } catch(e){
+    console.warn("Upload error:",e);
+    if(e.code==="storage/unauthorized") alert("Photo upload not enabled yet. Contact your coach.");
+    return null;
+  }
 };
 
 // ─── Goal options ─────────────────────────────────────────────────────────────
@@ -519,6 +524,22 @@ function ActiveWorkout({ user, workout, onComplete, onCancel }) {
   const [elapsed,     setElapsed]     = useState(0);
   const logIdRef = useRef(null);
 
+  // ── Workout summary (coach note shown before warm up) ──
+  const [summary,       setSummary]       = useState(null);
+  const [summaryLoaded, setSummaryLoaded] = useState(false);
+
+  useEffect(()=>{
+    if(!workout?.id || summaryLoaded) return;
+    (async()=>{
+      try {
+        const q2 = query(collection(db,"workoutSummaries"), where("dayId","==",workout.id));
+        const snap = await getDocs(q2);
+        if(!snap.empty) setSummary(snap.docs[0].data().summary);
+      } catch{}
+      setSummaryLoaded(true);
+    })();
+  },[workout?.id]);
+
   // Persist on change
   useEffect(()=>{ ls(KEYS.ACTIVE_WORKOUT,{workoutId:workout.id,setData,currentExIdx,startTime}); },[setData,currentExIdx]);
 
@@ -564,24 +585,6 @@ function ActiveWorkout({ user, workout, onComplete, onCancel }) {
     onComplete(newLogs);
   };
 
-  // ── Summary phase ──
-  const [summary, setSummary] = useState(null);
-  const [summaryLoaded, setSummaryLoaded] = useState(false);
-
-  useEffect(()=>{
-    if(!workout?.id||summaryLoaded) return;
-    // Try to load coach-written workout summary from Firebase
-    (async()=>{
-      try {
-        // Search workoutSummaries for this day's summary
-        const q2 = query(collection(db,"workoutSummaries"),where("dayId","==",workout.id));
-        const snap = await getDocs(q2);
-        if(!snap.empty) setSummary(snap.docs[0].data().summary);
-      } catch{}
-      setSummaryLoaded(true);
-    })();
-  },[workout?.id]);
-
   if(phase==="warmup" && summaryLoaded && summary && !ll("fw_saw_summary_"+workout.id)){
     return (
       <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:F.display,padding:"32px 20px",display:"flex",flexDirection:"column"}}>
@@ -605,7 +608,7 @@ function ActiveWorkout({ user, workout, onComplete, onCancel }) {
             </div>
           ))}
         </div>
-        <button onClick={()=>{ ls("fw_saw_summary_"+workout.id,true); }}
+        <button onClick={()=>{ ls("fw_saw_summary_"+workout.id,true); setSummary(null); }}
           style={{width:"100%",padding:"16px",borderRadius:8,border:"none",background:C.accent,color:"#000",fontFamily:F.display,fontSize:20,cursor:"pointer"}}>
           LET'S GO 💪
         </button>
