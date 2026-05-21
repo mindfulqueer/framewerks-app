@@ -65,11 +65,16 @@ const loadUserDoc = async uid => {
   try { const s=await getDoc(doc(db,"users",uid)); return s.exists()?s.data():null; } catch{ return null; }
 };
 const saveWeightEntry = async (uid,entry) => {
-  try { await addDoc(collection(db,"weightLog"),{userId:uid,...entry,loggedAt:serverTimestamp()}); } catch{}
+  try {
+    // Upsert by date — one doc per day per user
+    const docId = `${uid}_${entry.date}`;
+    await setDoc(doc(db,"weightLog",docId),{userId:uid,...entry,updatedAt:serverTimestamp()},{merge:true});
+    return docId;
+  } catch(e){ console.warn("saveWeightEntry:",e); return null; }
 };
 const loadWeightLog = async uid => {
   try {
-    const q=query(collection(db,"weightLog"),where("userId","==",uid),orderBy("loggedAt","desc"));
+    const q=query(collection(db,"weightLog"),where("userId","==",uid),orderBy("updatedAt","desc"));
     return (await getDocs(q)).docs.map(d=>({id:d.id,...d.data()}));
   } catch{ return []; }
 };
@@ -1069,12 +1074,12 @@ function HabitsTab({ user, habits, setHabits, habitDone, setHabitDone }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // TRACK TAB (History + Progress + Weight + Check-in)
 // ═══════════════════════════════════════════════════════════════════════════════
-function TrackTab({ workoutLogs, habits, habitDone, onRefresh, user }) {
+function TrackTab({ workoutLogs, habits, habitDone, weightLog: weightLogProp, onRefresh, user }) {
   const [view,     setView]    = useState("history");
   const [filter,   setFilter]  = useState("all");
   const [selected, setSelected]= useState(null);
   const [selEx,    setSelEx]   = useState("");
-  const [weightLog,setWeightLog]=useState(()=>ll(KEYS.WEIGHT_LOG,[]));
+  const weightLog = weightLogProp || ll(KEYS.WEIGHT_LOG,[]);
   const [wellbeing,setWellbeing]=useState(()=>ll(KEYS.WELLBEING,{}));
 
   const VIEWS=[{id:"history",label:"HISTORY"},{id:"progress",label:"STRENGTH"},{id:"habits",label:"HABITS"},{id:"weight",label:"WEIGHT"},{id:"checkin",label:"CHECK-IN"}];
@@ -1349,11 +1354,12 @@ function TrackTab({ workoutLogs, habits, habitDone, onRefresh, user }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // ME TAB
 // ═══════════════════════════════════════════════════════════════════════════════
-function MeTab({ user, onSignOut, onGoalsChange, onPerfGoalsChange }) {
+function MeTab({ user, onSignOut, onGoalsChange, onPerfGoalsChange, weightLog: weightLogProp, setWeightLog: setWeightLogProp }) {
   const [profile,     setProfile]     = useState(()=>ll(KEYS.PROFILE,{}));
   const [goals,       setGoals]       = useState(()=>ll(KEYS.GOALS,[]));
   const [perfGoals,   setPerfGoals]   = useState(()=>ll(KEYS.PERF_GOALS,[]));
-  const [weightLog,   setWeightLog]   = useState(()=>ll(KEYS.WEIGHT_LOG,[]));
+  const weightLog = weightLogProp || ll(KEYS.WEIGHT_LOG,[]);
+  const setWeightLog = (v)=>{ if(setWeightLogProp) setWeightLogProp(v); ls(KEYS.WEIGHT_LOG,v); };
   const [wellbeing,   setWellbeing]   = useState(()=>ll(KEYS.WELLBEING,{}));
   const [editProfile, setEditProfile] = useState(false);
   const [goalsOpen,   setGoalsOpen]   = useState(false);
@@ -1377,9 +1383,9 @@ function MeTab({ user, onSignOut, onGoalsChange, onPerfGoalsChange }) {
   };
   const setGoalDeadline=(name,dl)=>{ const u=goals.map(g=>g.name===name?{...g,deadline:dl}:g); setGoals(u); ls(KEYS.GOALS,u); onGoalsChange(u); if(user) saveUserDoc(user.uid,{goals:u}); };
 
-  const addPerfGoal=()=>{ const u=[...perfGoals,{id:Date.now().toString(),exercise:"",goalWeight:"",deadline:"",createdAt:Date.now()}]; setPerfGoals(u); ls(KEYS.PERF_GOALS,u); onPerfGoalsChange(u); };
+  const addPerfGoal=()=>{ const u=[...perfGoals,{id:Date.now().toString(),exercise:"",goalWeight:"",deadline:"",createdAt:Date.now()}]; setPerfGoals(u); ls(KEYS.PERF_GOALS,u); onPerfGoalsChange(u); if(user) saveUserDoc(user.uid,{perfGoals:u}); };
   const updPerfGoal=(id,f,v)=>{ const u=perfGoals.map(g=>g.id===id?{...g,[f]:v}:g); setPerfGoals(u); ls(KEYS.PERF_GOALS,u); onPerfGoalsChange(u); if(user) saveUserDoc(user.uid,{perfGoals:u}); };
-  const rmPerfGoal=(id)=>{ const u=perfGoals.filter(g=>g.id!==id); setPerfGoals(u); ls(KEYS.PERF_GOALS,u); onPerfGoalsChange(u); };
+  const rmPerfGoal=(id)=>{ const u=perfGoals.filter(g=>g.id!==id); setPerfGoals(u); ls(KEYS.PERF_GOALS,u); onPerfGoalsChange(u); if(user) saveUserDoc(user.uid,{perfGoals:u}); };
 
   const logWeight=async()=>{
     if(!newWeight) return; setSaving(true);
@@ -1392,11 +1398,20 @@ function MeTab({ user, onSignOut, onGoalsChange, onPerfGoalsChange }) {
   const handleProgressPhoto=async(file,idx)=>{
     if(!file||!user) return; setSaving(true);
     const url=await uploadFile(user.uid,file,"progressPhotos");
-    if(url&&weightLog.length>0){
+    if(url){
       const updated=[...weightLog];
-      const photos=[...(updated[0].photoUrls||[])];
-      photos[idx]=url; updated[0]={...updated[0],photoUrls:photos};
+      if(updated.length===0){
+        // No weight logged yet — create today's entry with just the photo
+        const today2=new Date().toISOString().slice(0,10);
+        const entry={weight:null,date:today2,loggedAt:Date.now(),photoUrls:[null,null,null,null]};
+        entry.photoUrls[idx]=url;
+        updated.unshift(entry);
+      } else {
+        const photos=[...(updated[0].photoUrls||[null,null,null,null])];
+        photos[idx]=url; updated[0]={...updated[0],photoUrls:photos};
+      }
       setWeightLog(updated); ls(KEYS.WEIGHT_LOG,updated);
+      // Upsert the entry to Firebase (saves photos array correctly)
       await saveWeightEntry(user.uid,updated[0]);
     }
     setSaving(false);
@@ -1657,54 +1672,104 @@ export default function App() {
   const [perfGoals,     setPerfGoals]    = useState(()=>ll(KEYS.PERF_GOALS,[]));
   const [habits,        setHabits]       = useState(()=>ll(KEYS.HABITS,[]));
   const [habitDone,     setHabitDone]    = useState(()=>ll(KEYS.HABIT_DONE,{}));
+  const [weightLog,     setWeightLog]    = useState(()=>ll(KEYS.WEIGHT_LOG,[]));
+
+  // Unsub refs for real-time listeners
+  const unsubRefs = useRef([]);
+  const cleanupListeners = () => { unsubRefs.current.forEach(u=>{ try{u();}catch{} }); unsubRefs.current=[]; };
 
   useEffect(()=>{ const u=onAuthStateChanged(auth,usr=>{setUser(usr);setAuthLoaded(true);}); return u; },[]);
 
   useEffect(()=>{
-    if(!user) return;
-    // Logs
-    loadLogs(user.uid).then(logs=>{
-      if(logs.length>0){
-        const merged=[...logs,...ll(KEYS.LOGS,[])];
-        const deduped=[...new Map(merged.map(l=>[l.id||l.completedAt,l])).values()];
-        deduped.sort((a,b)=>{const da=a.completedAt?.toDate?a.completedAt.toDate():new Date(a.completedAt||0),db2=b.completedAt?.toDate?b.completedAt.toDate():new Date(b.completedAt||0);return db2-da;});
-        setWorkoutLogs(deduped); ls(KEYS.LOGS,deduped);
-      }
-    });
-    // User doc
-    loadUserDoc(user.uid).then(data=>{
-      if(!data) return;
-      if(data.profile){ls(KEYS.PROFILE,data.profile);}
-      if(data.goals){setGoals(data.goals);ls(KEYS.GOALS,data.goals);}
-      if(data.perfGoals){setPerfGoals(data.perfGoals);ls(KEYS.PERF_GOALS,data.perfGoals);}
-      if(data.habits){setHabits(data.habits);ls(KEYS.HABITS,data.habits);}
-      if(data.habitDone){setHabitDone(data.habitDone);ls(KEYS.HABIT_DONE,data.habitDone);}
-      if(data.wellbeing){ls(KEYS.WELLBEING,data.wellbeing);}
-    });
-    // Weight log
-    loadWeightLog(user.uid).then(wl=>{ if(wl.length>0)ls(KEYS.WEIGHT_LOG,wl); });
-    // Program
-    (async()=>{
-      try{
-        let snap=await getDocs(query(collection(db,"clients"),where("userId","==",user.uid)));
-        if(snap.empty&&user.email){
-          snap=await getDocs(query(collection(db,"clients"),where("linkedEmail","==",user.email)));
-          if(!snap.empty) await updateDoc(doc(db,"clients",snap.docs[0].id),{userId:user.uid});
-        }
-        if(!snap.empty){
-          const cd=snap.docs[0].data();
-          if(cd.assignedProgramId){
-            const ps=await getDoc(doc(db,"programs",cd.assignedProgramId));
-            if(ps.exists()) setProgram({id:ps.id,...ps.data()});
+    if(!user){ cleanupListeners(); return; }
+
+    // ── 1. Workout logs — real-time listener ─────────────────────────────────
+    const logsQ = query(collection(db,"workoutLogs"), where("userId","==",user.uid), orderBy("completedAt","desc"));
+    const unsubLogs = onSnapshot(logsQ, snap=>{
+      const logs = snap.docs.map(d=>({id:d.id,...d.data()}));
+      // Merge with any locally-saved logs not yet in Firestore (e.g. offline)
+      const local = ll(KEYS.LOGS,[]).filter(l=>!l.id||l.id.toString().length<20); // local-only entries have short IDs
+      const merged = [...logs,...local];
+      const deduped = [...new Map(merged.map(l=>[l.id||l.completedAt,l])).values()];
+      deduped.sort((a,b)=>{
+        const da=a.completedAt?.toDate?a.completedAt.toDate():new Date(a.completedAt||0);
+        const db2=b.completedAt?.toDate?b.completedAt.toDate():new Date(b.completedAt||0);
+        return db2-da;
+      });
+      setWorkoutLogs(deduped); ls(KEYS.LOGS,deduped);
+    }, err=>console.warn("logs listener:",err));
+    unsubRefs.current.push(unsubLogs);
+
+    // ── 2. User doc — real-time listener (profile, goals, habits, wellbeing) ─
+    const unsubUser = onSnapshot(doc(db,"users",user.uid), snap=>{
+      if(!snap.exists()) return;
+      const data = snap.data();
+      if(data.profile)   { ls(KEYS.PROFILE,data.profile); }
+      if(data.goals)     { setGoals(data.goals);     ls(KEYS.GOALS,data.goals); }
+      if(data.perfGoals) { setPerfGoals(data.perfGoals); ls(KEYS.PERF_GOALS,data.perfGoals); }
+      if(data.habits)    { setHabits(data.habits);   ls(KEYS.HABITS,data.habits); }
+      if(data.habitDone) { setHabitDone(data.habitDone); ls(KEYS.HABIT_DONE,data.habitDone); }
+      if(data.wellbeing) { ls(KEYS.WELLBEING,data.wellbeing); }
+    }, err=>console.warn("user doc listener:",err));
+    unsubRefs.current.push(unsubUser);
+
+    // ── 3. Weight log — real-time listener ───────────────────────────────────
+    const wlQ = query(collection(db,"weightLog"), where("userId","==",user.uid), orderBy("updatedAt","desc"));
+    const unsubWeight = onSnapshot(wlQ, snap=>{
+      const entries = snap.docs.map(d=>({id:d.id,...d.data()}));
+      setWeightLog(entries); ls(KEYS.WEIGHT_LOG,entries);
+    }, err=>console.warn("weight listener:",err));
+    unsubRefs.current.push(unsubWeight);
+
+    // ── 4. Client doc — real-time listener for assigned program ──────────────
+    // Watches for coach assigning/changing program without needing app restart
+    const watchClientDoc = async () => {
+      try {
+        let clientId = null;
+        // Find client doc by userId
+        let snap = await getDocs(query(collection(db,"clients"), where("userId","==",user.uid)));
+        // Fallback: match by linkedEmail
+        if(snap.empty && user.email){
+          snap = await getDocs(query(collection(db,"clients"), where("linkedEmail","==",user.email)));
+          if(!snap.empty){
+            clientId = snap.docs[0].id;
+            await updateDoc(doc(db,"clients",clientId),{userId:user.uid});
           }
+        } else if(!snap.empty){
+          clientId = snap.docs[0].id;
         }
-      }catch(e){console.warn("Program load:",e);}
-    })();
+        if(!clientId) return;
+
+        // Real-time listener on this client's doc
+        const unsubClient = onSnapshot(doc(db,"clients",clientId), async clientSnap=>{
+          if(!clientSnap.exists()) return;
+          const cd = clientSnap.data();
+          if(cd.assignedProgramId){
+            try {
+              const ps = await getDoc(doc(db,"programs",cd.assignedProgramId));
+              if(ps.exists()) setProgram({id:ps.id,...ps.data()});
+            } catch(e){ console.warn("program fetch:",e); }
+          } else {
+            setProgram(null);
+          }
+        }, err=>console.warn("client doc listener:",err));
+        unsubRefs.current.push(unsubClient);
+      } catch(e){ console.warn("watchClientDoc:",e); }
+    };
+    watchClientDoc();
+
+    return cleanupListeners;
   },[user]);
 
+  // Pass weightLog down to TrackTab and MeTab via prop
   const handleComplete=(logs)=>{ setWorkoutLogs(logs); setActiveWorkout(null); setTab("track"); };
-  const handleRefresh=async()=>{ if(!user)return; const logs=await loadLogs(user.uid); if(logs.length>0){setWorkoutLogs(logs);ls(KEYS.LOGS,logs);} };
-  const handleSignOut=async()=>{ await signOut(auth); setUser(null); setTab("today"); };
+  const handleRefresh=async()=>{
+    if(!user) return;
+    // Force re-fetch (listeners will update automatically but this gives immediate feedback)
+    const logs = await loadLogs(user.uid);
+    if(logs.length>0){ setWorkoutLogs(logs); ls(KEYS.LOGS,logs); }
+  };
+  const handleSignOut=async()=>{ cleanupListeners(); await signOut(auth); setUser(null); setTab("today"); };
 
   if(!authLoaded) return <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{fontSize:36,fontFamily:F.display,color:C.accent,letterSpacing:"0.1em"}}>LOADING...</div></div>;
   if(!user) return <LoginScreen />;
@@ -1743,8 +1808,8 @@ export default function App() {
         {tab==="today"   &&<TodayTab user={user} workoutLogs={workoutLogs} program={program} perfGoals={perfGoals} goals={goals} habits={habits} habitDone={habitDone} onStartWorkout={setActiveWorkout} />}
         {tab==="program" &&<ProgramTab program={program} onStartWorkout={setActiveWorkout} />}
         {tab==="habits"  &&<HabitsTab user={user} habits={habits} setHabits={setHabits} habitDone={habitDone} setHabitDone={setHabitDone} />}
-        {tab==="track"   &&<TrackTab workoutLogs={workoutLogs} habits={habits} habitDone={habitDone} onRefresh={handleRefresh} user={user} />}
-        {tab==="me"      &&<MeTab user={user} onSignOut={handleSignOut} onGoalsChange={setGoals} onPerfGoalsChange={setPerfGoals} />}
+        {tab==="track"   &&<TrackTab workoutLogs={workoutLogs} habits={habits} habitDone={habitDone} weightLog={weightLog} onRefresh={handleRefresh} user={user} />}
+        {tab==="me"      &&<MeTab user={user} onSignOut={handleSignOut} onGoalsChange={setGoals} onPerfGoalsChange={setPerfGoals} weightLog={weightLog} setWeightLog={setWeightLog} />}
       </div>
 
       <nav style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",justifyContent:"space-around",padding:"10px 0 20px",zIndex:100}}>
