@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import {
   getFirestore, collection, query, where, orderBy, getDocs,
-  addDoc, serverTimestamp, setDoc, getDoc, doc, updateDoc
+  addDoc, serverTimestamp, setDoc, getDoc, doc, updateDoc, onSnapshot
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import {
   getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut
