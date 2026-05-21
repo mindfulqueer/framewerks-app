@@ -134,20 +134,63 @@ const fmtDate = ts => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // BREATHING COOL DOWN SCREEN
 // ═══════════════════════════════════════════════════════════════════════════════
-// ─── Gentle tone helper (Web Audio API) ──────────────────────────────────────
-function playTone(freq=220, duration=0.4, vol=0.08, type="sine") {
+// ─── Meditation chime system (Web Audio API) ─────────────────────────────────
+// Creates a rich bell/chime sound by layering harmonics with a long natural decay
+function playChime(type="breathe") {
+  // type: "breathe" (inhale + exhale) | "hold" | "final" | "prep"
   try {
     const ctx = new (window.AudioContext||window.webkitAudioContext)();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain); gain.connect(ctx.destination);
-    osc.type = type; osc.frequency.setValueAtTime(freq, ctx.currentTime);
-    gain.gain.setValueAtTime(0, ctx.currentTime);
-    gain.gain.linearRampToValueAtTime(vol, ctx.currentTime+0.05);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+duration);
-    osc.start(ctx.currentTime); osc.stop(ctx.currentTime+duration+0.05);
-    setTimeout(()=>ctx.close(), (duration+0.2)*1000);
+
+    const playPartial = (freq, vol, decaySec, delayMs=0) => {
+      setTimeout(()=>{
+        try {
+          const osc  = ctx.createOscillator();
+          const gain = ctx.createGain();
+          // Soft reverb via convolver would need audio buffer — use gain shaping instead
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(freq, ctx.currentTime);
+          // Sharp attack, long exponential decay — classic bell envelope
+          gain.gain.setValueAtTime(0, ctx.currentTime);
+          gain.gain.linearRampToValueAtTime(vol, ctx.currentTime + 0.01);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + decaySec);
+          osc.start(ctx.currentTime);
+          osc.stop(ctx.currentTime + decaySec + 0.05);
+        } catch{}
+      }, delayMs);
+    };
+
+    if(type === "breathe") {
+      // Warm singing-bowl style: root + octave + fifth harmonic
+      // Two gentle strikes 80ms apart for a shimmer effect
+      playPartial(432,  0.18, 3.5, 0);    // root — A4 (slightly detuned for warmth)
+      playPartial(864,  0.08, 2.2, 0);    // octave
+      playPartial(648,  0.05, 1.8, 0);    // fifth
+      playPartial(440,  0.06, 2.5, 80);   // slight shimmer second strike
+    } else if(type === "hold") {
+      // Softer, lower, single muted strike — signals to pause, not move
+      playPartial(288,  0.10, 2.0, 0);    // low D — grounding
+      playPartial(576,  0.04, 1.2, 0);    // octave, quiet
+      playPartial(360,  0.03, 1.0, 60);   // soft shimmer
+    } else if(type === "final") {
+      // Brighter and longer for the final breath sequence
+      playPartial(528,  0.20, 4.5, 0);    // 528hz "love frequency"
+      playPartial(1056, 0.07, 2.8, 0);    // octave
+      playPartial(792,  0.05, 2.2, 0);    // fifth
+      playPartial(528,  0.08, 3.5, 100);  // shimmer
+    } else if(type === "prep") {
+      // Very soft, high, tick-like — gentle pacing during prep
+      playPartial(880,  0.04, 0.6, 0);
+    }
+
+    // Auto-close after longest possible decay
+    setTimeout(()=>{ try{ctx.close();}catch{} }, 5000);
   } catch{}
+}
+
+// Legacy shim so existing calls still work if any remain
+function playTone(freq=220, duration=0.4, vol=0.08, type="sine") {
+  playChime("prep");
 }
 
 function BreathingScreen({ breathing, onFinish }) {
@@ -167,27 +210,29 @@ function BreathingScreen({ breathing, onFinish }) {
   const [endTimer, setEndTimer] = useState(5);
   const prevPhaseRef = useRef("");
 
-  // Play a tone when phase changes
+  // Play a meditation chime when phase changes
   useEffect(()=>{
     if(phase===prevPhaseRef.current) return;
     prevPhaseRef.current = phase;
-    if(phase==="inhale")       playTone(440, 0.3, 0.07);   // soft high — inhale start
-    else if(phase==="holdIn")  playTone(330, 0.2, 0.05);   // mid hold
-    else if(phase==="exhale")  playTone(220, 0.4, 0.07);   // low — exhale start
-    else if(phase==="holdOut") playTone(180, 0.2, 0.04);   // very low hold
-    else if(phase==="ending1") playTone(528, 0.5, 0.09);   // bright — final inhale
-    else if(phase==="ending2") playTone(174, 0.6, 0.07);   // deep — final exhale
+    // Breathe chime: same warm bowl tone for inhale and exhale
+    // Hold chime: distinct softer lower tone for both holds
+    if(phase==="inhale")       playChime("breathe");
+    else if(phase==="holdIn")  playChime("hold");
+    else if(phase==="exhale")  playChime("breathe");
+    else if(phase==="holdOut") playChime("hold");
+    else if(phase==="ending1") playChime("final");
+    else if(phase==="ending2") playChime("final");
   },[phase]);
 
   // ── Prep countdown ──
   useEffect(()=>{
     if(stage!=="prep") return;
-    // Play a soft tick each second
-    playTone(300, 0.15, 0.04, "sine");
+    // Gentle prep tick each second
+    playChime("prep");
     const t = setInterval(()=>{
       setPrepLeft(n=>{
         if(n<=1){ setStage("main"); setElapsed(0); clearInterval(t); return 0; }
-        playTone(300, 0.15, 0.04, "sine");
+        playChime("prep");
         return n-1;
       });
     },1000);
