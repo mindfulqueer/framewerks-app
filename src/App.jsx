@@ -564,6 +564,56 @@ function ActiveWorkout({ user, workout, onComplete, onCancel }) {
     onComplete(newLogs);
   };
 
+  // ── Summary phase ──
+  const [summary, setSummary] = useState(null);
+  const [summaryLoaded, setSummaryLoaded] = useState(false);
+
+  useEffect(()=>{
+    if(!workout?.id||summaryLoaded) return;
+    // Try to load coach-written workout summary from Firebase
+    (async()=>{
+      try {
+        // Search workoutSummaries for this day's summary
+        const q2 = query(collection(db,"workoutSummaries"),where("dayId","==",workout.id));
+        const snap = await getDocs(q2);
+        if(!snap.empty) setSummary(snap.docs[0].data().summary);
+      } catch{}
+      setSummaryLoaded(true);
+    })();
+  },[workout?.id]);
+
+  if(phase==="warmup" && summaryLoaded && summary && !ll("fw_saw_summary_"+workout.id)){
+    return (
+      <div style={{minHeight:"100vh",background:C.bg,color:C.text,fontFamily:F.display,padding:"32px 20px",display:"flex",flexDirection:"column"}}>
+        <div style={{fontSize:11,fontFamily:F.body,color:C.accent,letterSpacing:"0.2em",marginBottom:8}}>TODAY'S SESSION</div>
+        <div style={{fontSize:36,marginBottom:6}}>{workout.name}</div>
+        <div style={{fontSize:12,fontFamily:F.body,color:C.textMuted,marginBottom:24}}>
+          {workout.exercises.length} exercises{workout.warmup?.length>0?" · warm up included":""}
+        </div>
+        {/* Coach summary */}
+        <div style={{background:C.card,border:`1px solid ${C.accent}44`,borderRadius:12,padding:"20px",marginBottom:20,flex:1}}>
+          <div style={{fontSize:13,fontFamily:F.body,color:C.accent,fontWeight:700,letterSpacing:"0.1em",marginBottom:10}}>📋 COACH NOTES</div>
+          <div style={{fontSize:15,fontFamily:F.body,color:C.text,lineHeight:1.7}}>{summary}</div>
+        </div>
+        {/* Quick exercise list */}
+        <div style={{marginBottom:24}}>
+          <div style={{fontSize:11,fontFamily:F.body,color:C.textMuted,fontWeight:700,letterSpacing:"0.12em",marginBottom:10}}>WHAT YOU'RE WORKING ON</div>
+          {workout.exercises.map((ex,i)=>(
+            <div key={ex.id||i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+              <div style={{fontSize:16,fontFamily:F.display}}>{ex.name}</div>
+              <div style={{fontSize:12,fontFamily:F.body,color:C.textMuted}}>{ex.sets} × {ex.reps}</div>
+            </div>
+          ))}
+        </div>
+        <button onClick={()=>{ ls("fw_saw_summary_"+workout.id,true); }}
+          style={{width:"100%",padding:"16px",borderRadius:8,border:"none",background:C.accent,color:"#000",fontFamily:F.display,fontSize:20,cursor:"pointer"}}>
+          LET'S GO 💪
+        </button>
+        <button onClick={onCancel} style={{width:"100%",padding:"10px",borderRadius:8,border:`1px solid ${C.border}`,background:"transparent",color:C.textMuted,fontFamily:F.display,fontSize:13,cursor:"pointer",marginTop:10}}>CANCEL</button>
+      </div>
+    );
+  }
+
   // ── Warmup phase ──
   if(phase==="warmup"){
     const hasWarmup = workout.warmup?.length>0;
