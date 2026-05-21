@@ -134,111 +134,253 @@ const fmtDate = ts => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // BREATHING COOL DOWN SCREEN
 // ═══════════════════════════════════════════════════════════════════════════════
+// ─── Gentle tone helper (Web Audio API) ──────────────────────────────────────
+function playTone(freq=220, duration=0.4, vol=0.08, type="sine") {
+  try {
+    const ctx = new (window.AudioContext||window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.type = type; osc.frequency.setValueAtTime(freq, ctx.currentTime);
+    gain.gain.setValueAtTime(0, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(vol, ctx.currentTime+0.05);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+duration);
+    osc.start(ctx.currentTime); osc.stop(ctx.currentTime+duration+0.05);
+    setTimeout(()=>ctx.close(), (duration+0.2)*1000);
+  } catch{}
+}
+
 function BreathingScreen({ breathing, onFinish }) {
   const pattern = (breathing?.pattern||"4-4-4-4").split("-").map(Number);
-  const [inhale,holdIn,exhale,holdOut] = [pattern[0]||4,pattern[1]||4,pattern[2]||4,pattern[3]||4];
-  const totalCycle = inhale+holdIn+exhale+holdOut;
-  const DURATION = 3*60; // 3 minutes
+  const [inhale, holdIn, exhale, holdOut] = [pattern[0]||4, pattern[1]||4, pattern[2]||4, pattern[3]||4];
+  const totalCycle = inhale + holdIn + exhale + holdOut;
+  const PREP_DURATION = 30; // seconds
+  const MAIN_DURATION = 3 * 60; // 3 minutes
 
+  // stage: "start" | "prep" | "main" | "ending1" | "ending2" | "done"
+  const [stage,    setStage]    = useState("start");
   const [elapsed,  setElapsed]  = useState(0);
-  const [phase,    setPhase]    = useState("inhale"); // inhale|holdIn|exhale|holdOut|ending1|ending2|done
-  const [cyclePos, setCyclePos] = useState(0); // position in current cycle
-  const [ballY,    setBallY]    = useState(0.5); // 0=top 1=bottom
-  const [ballSize, setBallSize] = useState(1); // scale
-  const [endStep,  setEndStep]  = useState(0); // 0=first inhale,1=exhale,2=done
+  const [prepLeft, setPrepLeft] = useState(PREP_DURATION);
+  const [phase,    setPhase]    = useState("inhale");
+  const [ballY,    setBallY]    = useState(1);   // 1=BOTTOM (rest), 0=TOP
+  const [ballSize, setBallSize] = useState(1);
   const [endTimer, setEndTimer] = useState(5);
+  const prevPhaseRef = useRef("");
 
-  const isDone = elapsed >= DURATION;
-
-  useEffect(() => {
-    if(isDone) return;
-    const t = setInterval(()=>setElapsed(e=>e+0.05),50);
-    return ()=>clearInterval(t);
-  },[isDone]);
-
-  useEffect(() => {
-    if(elapsed>=DURATION && phase!=="ending1"&&phase!=="ending2"&&phase!=="done"){
-      setPhase("ending1"); setEndStep(0); setEndTimer(5);
-    }
-  },[elapsed]);
-
-  // End sequence
+  // Play a tone when phase changes
   useEffect(()=>{
-    if(phase!=="ending1"&&phase!=="ending2") return;
-    const t=setInterval(()=>{
+    if(phase===prevPhaseRef.current) return;
+    prevPhaseRef.current = phase;
+    if(phase==="inhale")       playTone(440, 0.3, 0.07);   // soft high — inhale start
+    else if(phase==="holdIn")  playTone(330, 0.2, 0.05);   // mid hold
+    else if(phase==="exhale")  playTone(220, 0.4, 0.07);   // low — exhale start
+    else if(phase==="holdOut") playTone(180, 0.2, 0.04);   // very low hold
+    else if(phase==="ending1") playTone(528, 0.5, 0.09);   // bright — final inhale
+    else if(phase==="ending2") playTone(174, 0.6, 0.07);   // deep — final exhale
+  },[phase]);
+
+  // ── Prep countdown ──
+  useEffect(()=>{
+    if(stage!=="prep") return;
+    // Play a soft tick each second
+    playTone(300, 0.15, 0.04, "sine");
+    const t = setInterval(()=>{
+      setPrepLeft(n=>{
+        if(n<=1){ setStage("main"); setElapsed(0); clearInterval(t); return 0; }
+        playTone(300, 0.15, 0.04, "sine");
+        return n-1;
+      });
+    },1000);
+    return()=>clearInterval(t);
+  },[stage]);
+
+  // ── Main timer ──
+  useEffect(()=>{
+    if(stage!=="main") return;
+    const t = setInterval(()=>setElapsed(e=>e+0.05), 50);
+    return()=>clearInterval(t);
+  },[stage]);
+
+  // ── Trigger ending after 3 min ──
+  useEffect(()=>{
+    if(stage==="main" && elapsed>=MAIN_DURATION){
+      setStage("ending1"); setEndTimer(5);
+    }
+  },[elapsed, stage]);
+
+  // ── Ending countdown ──
+  useEffect(()=>{
+    if(stage!=="ending1"&&stage!=="ending2") return;
+    const t = setInterval(()=>{
       setEndTimer(n=>{
         if(n<=1){
-          if(phase==="ending1"){ setPhase("ending2"); return 5; }
-          else{ setPhase("done"); onFinish(); return 0; }
+          if(stage==="ending1"){ setStage("ending2"); return 5; }
+          else{ setStage("done"); onFinish(); return 0; }
         }
         return n-1;
       });
     },1000);
     return()=>clearInterval(t);
-  },[phase]);
+  },[stage]);
 
-  // Phase animation
+  // ── Ball animation during main ──
   useEffect(()=>{
-    if(phase==="ending1"){ setBallY(0); setBallSize(1.6); return; }
-    if(phase==="ending2"){ setBallY(1); setBallSize(0.6); return; }
+    if(stage==="ending1"){ setBallY(0); setBallSize(1.7); setPhase("ending1"); return; }
+    if(stage==="ending2"){ setBallY(1); setBallSize(0.7); setPhase("ending2"); return; }
+    if(stage!=="main") return;
+
     const pos = elapsed % totalCycle;
-    let p="inhale", cy=pos;
-    if(cy<inhale){         p="inhale";  setBallY(cy/inhale);      setBallSize(1+(cy/inhale)*0.4); }
-    else if(cy<inhale+holdIn){ p="holdIn"; setBallY(1);             setBallSize(1.4); }
-    else if(cy<inhale+holdIn+exhale){ const r=cy-inhale-holdIn; p="exhale"; setBallY(1-r/exhale); setBallSize(1.4-(r/exhale)*0.4); }
-    else{ p="holdOut"; setBallY(0); setBallSize(1); }
-    setPhase(p);
-  },[elapsed,totalCycle]);
+    if(pos < inhale){
+      // INHALE — ball rises from bottom (Y=1) to top (Y=0)
+      const t = pos/inhale;
+      setPhase("inhale"); setBallY(1-t); setBallSize(1 + t*0.5);
+    } else if(pos < inhale+holdIn){
+      // HOLD IN — ball stays at top, big
+      setPhase("holdIn"); setBallY(0); setBallSize(1.5);
+    } else if(pos < inhale+holdIn+exhale){
+      // EXHALE — ball drops from top (Y=0) to bottom (Y=1)
+      const t = (pos-inhale-holdIn)/exhale;
+      setPhase("exhale"); setBallY(t); setBallSize(1.5 - t*0.5);
+    } else {
+      // HOLD OUT — ball stays at bottom, small
+      setPhase("holdOut"); setBallY(1); setBallSize(1);
+    }
+  },[elapsed, stage, totalCycle, inhale, holdIn, exhale]);
 
-  const phaseLabel = phase==="inhale"?"INHALE":phase==="holdIn"?"HOLD":phase==="exhale"?"EXHALE":phase==="holdOut"?"HOLD":phase==="ending1"?"DEEP INHALE":"LONG EXHALE";
-  const phaseColor = phase==="inhale"||phase==="ending1"?C.accentBlue:phase==="exhale"||phase==="ending2"?C.accentGreen:C.accent;
-  const timeLeft = Math.max(0,DURATION-elapsed);
-  const progress = Math.min(elapsed/DURATION,1);
-  const cx=160, cy2=200, trackH=240, ballRadius=28*ballSize;
-  const ballCY = cy2-trackH/2 + ballY*trackH;
+  const phaseLabel = {
+    inhale:"INHALE", holdIn:"HOLD", exhale:"EXHALE", holdOut:"HOLD",
+    ending1:"DEEP INHALE", ending2:"LONG EXHALE"
+  }[phase] || "BREATHE";
 
+  const phaseColor = (phase==="inhale"||phase==="ending1") ? C.accentBlue
+    : (phase==="exhale"||phase==="ending2") ? C.accentGreen
+    : C.accent;
+
+  const timeLeft = Math.max(0, MAIN_DURATION - elapsed);
+  const mainProgress = stage==="main" ? Math.min(elapsed/MAIN_DURATION,1) : stage==="ending1"||stage==="ending2"||stage==="done" ? 1 : 0;
+
+  // SVG geometry
+  const CX=160, CY=210, R=145;
+  const TRACK_TOP = CY - 105;
+  const TRACK_BOT = CY + 105;
+  const TRACK_H = TRACK_BOT - TRACK_TOP;
+  const ballCY = TRACK_TOP + ballY * TRACK_H;
+  const ballR  = 26 * ballSize;
+  const arc = 2*Math.PI*R;
+
+  // ── START SCREEN ──
+  if(stage==="start") return (
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:32,fontFamily:F.display,textAlign:"center"}}>
+      <div style={{fontSize:11,fontFamily:F.body,color:C.textMuted,letterSpacing:"0.2em",marginBottom:12}}>COOL DOWN</div>
+      <div style={{fontSize:40,color:C.text,marginBottom:6}}>BREATHING</div>
+      <div style={{width:80,height:80,borderRadius:"50%",background:C.accentBlue+"22",border:`2px solid ${C.accentBlue}44`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:36,margin:"24px auto"}}>🧘</div>
+      <div style={{fontSize:14,fontFamily:F.body,color:C.text,lineHeight:1.8,maxWidth:280,marginBottom:8}}>
+        Find a comfortable seat or lie down.
+      </div>
+      <div style={{fontSize:13,fontFamily:F.body,color:C.textMuted,lineHeight:1.8,maxWidth:280,marginBottom:6}}>
+        Take slow, deep breaths into your belly.
+      </div>
+      <div style={{fontSize:13,fontFamily:F.body,color:C.textMuted,lineHeight:1.8,maxWidth:280,marginBottom:32}}>
+        <span style={{color:C.accentBlue}}>Inhale through your nose.</span>
+        {"  "}
+        <span style={{color:C.accentGreen}}>Exhale through your mouth.</span>
+      </div>
+      <div style={{fontSize:13,fontFamily:F.body,color:C.textMuted,marginBottom:6}}>Pattern: <span style={{color:C.accent}}>{breathing?.pattern||"4-4-4-4"}</span></div>
+      {breathing?.notes&&<div style={{fontSize:12,fontFamily:F.body,color:C.textMuted,marginBottom:24,fontStyle:"italic",maxWidth:260}}>{breathing.notes}</div>}
+      <button onClick={()=>setStage("prep")}
+        style={{padding:"16px 48px",borderRadius:12,border:"none",background:C.accentBlue,color:"#000",fontFamily:F.display,fontSize:22,cursor:"pointer",letterSpacing:"0.1em",marginBottom:16}}>
+        BEGIN
+      </button>
+      <button onClick={onFinish}
+        style={{padding:"10px 24px",borderRadius:8,border:`1px solid ${C.border}`,background:"transparent",color:C.textMuted,fontFamily:F.display,fontSize:13,cursor:"pointer"}}>
+        SKIP
+      </button>
+    </div>
+  );
+
+  // ── PREP SCREEN (30s countdown) ──
+  if(stage==="prep") return (
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:32,fontFamily:F.display,textAlign:"center"}}>
+      <div style={{fontSize:11,fontFamily:F.body,color:C.textMuted,letterSpacing:"0.2em",marginBottom:20}}>SETTLING IN</div>
+      <div style={{width:160,height:160,borderRadius:"50%",background:"transparent",border:`3px solid ${C.accentBlue}44`,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:32,position:"relative"}}>
+        {/* Countdown arc */}
+        <svg width={160} height={160} style={{position:"absolute",inset:0,transform:"rotate(-90deg)"}}>
+          <circle cx={80} cy={80} r={76} fill="none" stroke={C.accentBlue} strokeWidth={3}
+            strokeDasharray={`${2*Math.PI*76*(prepLeft/PREP_DURATION)} ${2*Math.PI*76*(1-prepLeft/PREP_DURATION)}`} />
+        </svg>
+        <div style={{fontSize:64,fontFamily:F.display,color:C.accentBlue,lineHeight:1}}>{prepLeft}</div>
+      </div>
+      <div style={{fontSize:18,fontFamily:F.body,color:C.textMuted,lineHeight:1.9,maxWidth:280}}>
+        Slow your breathing.<br/>
+        <span style={{color:C.accentBlue}}>Nose in</span> · <span style={{color:C.accentGreen}}>mouth out</span><br/>
+        Deep into your belly.
+      </div>
+      <button onClick={onFinish}
+        style={{marginTop:48,padding:"10px 24px",borderRadius:8,border:`1px solid ${C.border}`,background:"transparent",color:C.textMuted,fontFamily:F.display,fontSize:13,cursor:"pointer"}}>
+        SKIP
+      </button>
+    </div>
+  );
+
+  // ── MAIN + ENDING SCREENS ──
   return (
     <div style={{minHeight:"100vh",background:C.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24,fontFamily:F.display}}>
-      <div style={{fontSize:11,fontFamily:F.body,color:C.textMuted,letterSpacing:"0.2em",marginBottom:8}}>COOL DOWN</div>
-      <div style={{fontSize:32,color:C.text,marginBottom:4}}>BREATHING</div>
-      <div style={{fontSize:13,fontFamily:F.body,color:C.textMuted,marginBottom:32,textAlign:"center"}}>
-        {breathing?.notes||"Breathe through the nose. Follow the ball."}
+      <div style={{fontSize:11,fontFamily:F.body,color:C.textMuted,letterSpacing:"0.2em",marginBottom:4}}>COOL DOWN · BREATHING</div>
+      <div style={{fontSize:13,fontFamily:F.body,color:C.textMuted,marginBottom:16,textAlign:"center"}}>
+        {(stage==="ending1"||stage==="ending2")?"Final breath":"Follow the ball · nose in · mouth out"}
       </div>
 
-      {/* SVG breathing animation */}
-      <svg width={320} height={420} style={{marginBottom:24}}>
-        {/* Timer arc */}
-        <circle cx={160} cy={210} r={150} fill="none" stroke={C.border} strokeWidth={3}/>
-        <circle cx={160} cy={210} r={150} fill="none" stroke={phaseColor} strokeWidth={3}
-          strokeDasharray={`${2*Math.PI*150*progress} ${2*Math.PI*150*(1-progress)}`}
-          strokeDashoffset={2*Math.PI*150*0.25}
-          style={{transition:"stroke 0.5s",transform:"rotate(-90deg)",transformOrigin:"160px 210px"}}/>
-        {/* Track line */}
-        <line x1={160} y1={cy2-trackH/2} x2={160} y2={cy2+trackH/2} stroke={C.border} strokeWidth={2} strokeDasharray="4,4"/>
+      <svg width={320} height={430}>
+        {/* Outer timer ring */}
+        <circle cx={CX} cy={CY} r={R} fill="none" stroke={C.border} strokeWidth={2}/>
+        <circle cx={CX} cy={CY} r={R} fill="none" stroke={phaseColor} strokeWidth={2}
+          strokeDasharray={`${arc*mainProgress} ${arc*(1-mainProgress)}`}
+          strokeDashoffset={arc*0.25}
+          style={{transition:"stroke 0.6s",transform:`rotate(-90deg)`,transformOrigin:`${CX}px ${CY}px`}}/>
+        {/* INHALE label at top */}
+        <text x={CX} y={TRACK_TOP-14} textAnchor="middle" fill={C.accentBlue} fontSize={10} fontFamily={F.body} fontWeight="700" letterSpacing="0.15em">↑ INHALE</text>
+        {/* EXHALE label at bottom */}
+        <text x={CX} y={TRACK_BOT+20} textAnchor="middle" fill={C.accentGreen} fontSize={10} fontFamily={F.body} fontWeight="700" letterSpacing="0.15em">↓ EXHALE</text>
+        {/* Track */}
+        <line x1={CX} y1={TRACK_TOP} x2={CX} y2={TRACK_BOT} stroke={C.border} strokeWidth={1.5} strokeDasharray="5,5"/>
+        {/* Glow trail */}
+        <ellipse cx={CX} cy={ballCY} rx={ballR*0.5} ry={ballR*1.4} fill={phaseColor} opacity={0.12}
+          style={{transition:"all 0.12s linear,fill 0.5s"}}/>
         {/* Ball */}
-        <circle cx={160} cy={ballCY} r={ballRadius} fill={phaseColor} opacity={0.9}
-          style={{transition:"cy 0.1s,r 0.1s,fill 0.5s",filter:`drop-shadow(0 0 ${ballRadius*0.6}px ${phaseColor})`}}/>
-        {/* Timer text */}
-        <text x={160} y={390} textAnchor="middle" fill={C.textMuted} fontSize={13} fontFamily={F.body}>
-          {Math.floor(timeLeft/60)}:{String(Math.floor(timeLeft%60)).padStart(2,"0")}
+        <circle cx={CX} cy={ballCY} r={ballR} fill={phaseColor} opacity={0.95}
+          style={{transition:"cy 0.12s linear,r 0.12s linear,fill 0.5s",filter:`drop-shadow(0 0 ${ballR*0.7}px ${phaseColor})`}}/>
+        {/* Phase label inside ball */}
+        <text x={CX} y={ballCY+5} textAnchor="middle" fill="#000" fontSize={9} fontFamily={F.body} fontWeight="700"
+          style={{userSelect:"none"}}>
+          {phase==="inhale"?"▲":phase==="exhale"?"▼":"●"}
+        </text>
+        {/* Timer */}
+        <text x={CX} y={400} textAnchor="middle" fill={C.textMuted} fontSize={13} fontFamily={F.body}>
+          {stage==="main"?`${Math.floor(timeLeft/60)}:${String(Math.floor(timeLeft%60)).padStart(2,"0")}`:""}
         </text>
       </svg>
 
-      <div style={{fontSize:36,color:phaseColor,letterSpacing:"0.15em",marginBottom:8,transition:"color 0.5s"}}>{phaseLabel}</div>
+      {/* Phase label */}
+      <div style={{fontSize:40,color:phaseColor,letterSpacing:"0.15em",marginBottom:6,transition:"color 0.5s",marginTop:8}}>{phaseLabel}</div>
 
-      {(phase==="ending1"||phase==="ending2")&&(
-        <div style={{fontSize:18,fontFamily:F.body,color:C.textMuted,textAlign:"center",maxWidth:260}}>
-          {phase==="ending1"?"Take a big deep breath in...":"Now slowly exhale everything..."}
-          <div style={{fontSize:36,color:phaseColor,marginTop:8}}>{endTimer}</div>
+      {/* Ending sequence */}
+      {(stage==="ending1"||stage==="ending2")&&(
+        <div style={{textAlign:"center",marginBottom:16}}>
+          <div style={{fontSize:15,fontFamily:F.body,color:C.textMuted,marginBottom:6}}>
+            {stage==="ending1"?"Take one big deep breath in through your nose...":"Now slowly exhale everything out through your mouth..."}
+          </div>
+          <div style={{fontSize:52,fontFamily:F.display,color:phaseColor}}>{endTimer}</div>
         </div>
       )}
 
-      <div style={{fontSize:13,fontFamily:F.body,color:C.textMuted,textAlign:"center",marginBottom:32}}>
-        Pattern: {breathing?.pattern||"4-4-4-4"}
-      </div>
+      {stage==="main"&&(
+        <div style={{fontSize:12,fontFamily:F.body,color:C.textMuted,textAlign:"center",marginTop:4}}>
+          Pattern: <span style={{color:C.accent}}>{breathing?.pattern||"4-4-4-4"}</span>
+        </div>
+      )}
 
       <button onClick={onFinish}
-        style={{padding:"12px 32px",borderRadius:8,border:`1px solid ${C.border}`,background:"transparent",color:C.textMuted,fontFamily:F.display,fontSize:14,cursor:"pointer"}}>
+        style={{marginTop:20,padding:"10px 28px",borderRadius:8,border:`1px solid ${C.border}`,background:"transparent",color:C.textMuted,fontFamily:F.display,fontSize:13,cursor:"pointer"}}>
         SKIP
       </button>
     </div>
