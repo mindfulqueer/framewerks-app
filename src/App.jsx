@@ -64,6 +64,19 @@ const saveUserDoc = async (uid,data) => {
 const loadUserDoc = async uid => {
   try { const s=await getDoc(doc(db,"users",uid)); return s.exists()?s.data():null; } catch{ return null; }
 };
+const saveCheckin = async (uid, dateKey, data) => {
+  try {
+    // Save as its own doc: checkIns/{uid}_{date}
+    const docId = `${uid}_${dateKey}`;
+    await setDoc(doc(db,"checkIns",docId), {
+      userId: uid,
+      date: dateKey,
+      ...data,
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+  } catch(e){ console.warn("saveCheckin:", e); }
+};
+
 const saveWeightEntry = async (uid,entry) => {
   try {
     // Upsert by date — one doc per day per user
@@ -1162,9 +1175,13 @@ function TrackTab({ workoutLogs, habits, habitDone, weightLog: weightLogProp, on
   const today=new Date().toISOString().slice(0,10);
   const todayWB=wellbeing[today]||{};
   const saveWB=(field,val)=>{
-    const u={...wellbeing,[today]:{...todayWB,[field]:val}};
+    const updated={...todayWB,[field]:val};
+    const u={...wellbeing,[today]:updated};
     setWellbeing(u); ls(KEYS.WELLBEING,u);
-    if(user) saveUserDoc(user.uid,{wellbeing:u});
+    if(user){
+      saveUserDoc(user.uid,{wellbeing:u});        // keep in user doc for overview
+      saveCheckin(user.uid, today, updated);       // also save as dedicated daily doc
+    }
   };
 
   if(selected){
@@ -1426,7 +1443,15 @@ function MeTab({ user, onSignOut, onGoalsChange, onPerfGoalsChange, weightLog: w
   const todayWB=wellbeing[today]||{};
 
   const saveProfile=async p=>{ setProfile(p); ls(KEYS.PROFILE,p); if(user) await saveUserDoc(user.uid,{profile:p}); };
-  const saveWB=(field,val)=>{ const u={...wellbeing,[today]:{...todayWB,[field]:val}}; setWellbeing(u); ls(KEYS.WELLBEING,u); if(user) saveUserDoc(user.uid,{wellbeing:u}); };
+  const saveWB=(field,val)=>{
+    const updated={...todayWB,[field]:val};
+    const u={...wellbeing,[today]:updated};
+    setWellbeing(u); ls(KEYS.WELLBEING,u);
+    if(user){
+      saveUserDoc(user.uid,{wellbeing:u});
+      saveCheckin(user.uid, today, updated);
+    }
+  };
 
   const toggleGoal=(name)=>{
     const exists=goals.find(g=>g.name===name);
