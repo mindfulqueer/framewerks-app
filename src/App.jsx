@@ -1752,91 +1752,77 @@ export default function App() {
   const [habitDone,     setHabitDone]    = useState(()=>ll(KEYS.HABIT_DONE,{}));
   const [weightLog,     setWeightLog]    = useState(()=>ll(KEYS.WEIGHT_LOG,[]));
 
-  // Unsub refs for real-time listeners
-  const unsubRefs = useRef([]);
-  const cleanupListeners = () => { unsubRefs.current.forEach(u=>{ try{u();}catch{} }); unsubRefs.current=[]; };
-
   useEffect(()=>{ const u=onAuthStateChanged(auth,usr=>{setUser(usr);setAuthLoaded(true);}); return u; },[]);
 
   useEffect(()=>{
-    if(!user){ cleanupListeners(); return; }
+    if(!user) return;
 
-    // ── 1. Workout logs — real-time listener ─────────────────────────────────
-    const logsQ = query(collection(db,"workoutLogs"), where("userId","==",user.uid), orderBy("completedAt","desc"));
-    const unsubLogs = onSnapshot(logsQ, snap=>{
-      const logs = snap.docs.map(d=>({id:d.id,...d.data()}));
-      // Merge with any locally-saved logs not yet in Firestore (e.g. offline)
-      const local = ll(KEYS.LOGS,[]).filter(l=>!l.id||l.id.toString().length<20); // local-only entries have short IDs
-      const merged = [...logs,...local];
-      const deduped = [...new Map(merged.map(l=>[l.id||l.completedAt,l])).values()];
-      deduped.sort((a,b)=>{
-        const da=a.completedAt?.toDate?a.completedAt.toDate():new Date(a.completedAt||0);
-        const db2=b.completedAt?.toDate?b.completedAt.toDate():new Date(b.completedAt||0);
-        return db2-da;
-      });
-      setWorkoutLogs(deduped); ls(KEYS.LOGS,deduped);
-    }, err=>console.warn("logs listener:",err));
-    unsubRefs.current.push(unsubLogs);
-
-    // ── 2. User doc — real-time listener (profile, goals, habits, wellbeing) ─
-    const unsubUser = onSnapshot(doc(db,"users",user.uid), snap=>{
-      if(!snap.exists()) return;
-      const data = snap.data();
-      if(data.profile)   { ls(KEYS.PROFILE,data.profile); }
-      if(data.goals)     { setGoals(data.goals);     ls(KEYS.GOALS,data.goals); }
-      if(data.perfGoals) { setPerfGoals(data.perfGoals); ls(KEYS.PERF_GOALS,data.perfGoals); }
-      if(data.habits)    { setHabits(data.habits);   ls(KEYS.HABITS,data.habits); }
-      if(data.habitDone) { setHabitDone(data.habitDone); ls(KEYS.HABIT_DONE,data.habitDone); }
-      if(data.wellbeing) { ls(KEYS.WELLBEING,data.wellbeing); }
-    }, err=>console.warn("user doc listener:",err));
-    unsubRefs.current.push(unsubUser);
-
-    // ── 3. Weight log — real-time listener ───────────────────────────────────
-    const wlQ = query(collection(db,"weightLog"), where("userId","==",user.uid), orderBy("updatedAt","desc"));
-    const unsubWeight = onSnapshot(wlQ, snap=>{
-      const entries = snap.docs.map(d=>({id:d.id,...d.data()}));
-      setWeightLog(entries); ls(KEYS.WEIGHT_LOG,entries);
-    }, err=>console.warn("weight listener:",err));
-    unsubRefs.current.push(unsubWeight);
-
-    // ── 4. Client doc — real-time listener for assigned program ──────────────
-    // Watches for coach assigning/changing program without needing app restart
-    const watchClientDoc = async () => {
+    // ── Load all data once on login ──────────────────────────────────────────
+    const loadAllData = async () => {
       try {
-        let clientId = null;
-        // Find client doc by userId
-        let snap = await getDocs(query(collection(db,"clients"), where("userId","==",user.uid)));
-        // Fallback: match by linkedEmail
-        if(snap.empty && user.email){
-          snap = await getDocs(query(collection(db,"clients"), where("linkedEmail","==",user.email)));
-          if(!snap.empty){
-            clientId = snap.docs[0].id;
-            await updateDoc(doc(db,"clients",clientId),{userId:user.uid});
-          }
-        } else if(!snap.empty){
-          clientId = snap.docs[0].id;
+        // 1. Workout logs
+        const logs = await loadLogs(user.uid);
+        if(logs.length > 0){
+          const local = ll(KEYS.LOGS,[]);
+          const merged = [...logs,...local];
+          const deduped = [...new Map(merged.map(l=>[l.id||l.completedAt,l])).values()];
+          deduped.sort((a,b)=>{
+            const da=a.completedAt?.toDate?a.completedAt.toDate():new Date(a.completedAt||0);
+            const db2=b.completedAt?.toDate?b.completedAt.toDate():new Date(b.completedAt||0);
+            return db2-da;
+          });
+          setWorkoutLogs(deduped); ls(KEYS.LOGS,deduped);
         }
-        if(!clientId) return;
 
-        // Real-time listener on this client's doc
-        const unsubClient = onSnapshot(doc(db,"clients",clientId), async clientSnap=>{
-          if(!clientSnap.exists()) return;
-          const cd = clientSnap.data();
-          if(cd.assignedProgramId){
-            try {
+        // 2. User doc (profile, goals, habits, wellbeing)
+        const userData = await loadUserDoc(user.uid);
+        if(userData){
+          if(userData.profile)   { ls(KEYS.PROFILE,userData.profile); }
+          if(userData.goals)     { setGoals(userData.goals);     ls(KEYS.GOALS,userData.goals); }
+          if(userData.perfGoals) { setPerfGoals(userData.perfGoals); ls(KEYS.PERF_GOALS,userData.perfGoals); }
+          if(userData.habits)    { setHabits(userData.habits);   ls(KEYS.HABITS,userData.habits); }
+          if(userData.habitDone) { setHabitDone(userData.habitDone); ls(KEYS.HABIT_DONE,userData.habitDone); }
+          if(userData.wellbeing) { ls(KEYS.WELLBEING,userData.wellbeing); }
+        }
+
+        // 3. Weight log
+        const wl = await loadWeightLog(user.uid);
+        if(wl.length > 0){ setWeightLog(wl); ls(KEYS.WEIGHT_LOG,wl); }
+
+        // 4. Today's check-in
+        try {
+          const today2 = new Date().toISOString().slice(0,10);
+          const ciSnap = await getDoc(doc(db,"checkIns",`${user.uid}_${today2}`));
+          if(ciSnap.exists()){
+            const existing = ll(KEYS.WELLBEING,{});
+            ls(KEYS.WELLBEING,{...existing,[today2]:ciSnap.data()});
+          }
+        } catch{}
+
+        // 5. Assigned program via client doc
+        try {
+          let clientSnap = await getDocs(query(collection(db,"clients"), where("userId","==",user.uid)));
+          if(clientSnap.empty && user.email){
+            clientSnap = await getDocs(query(collection(db,"clients"), where("linkedEmail","==",user.email)));
+            if(!clientSnap.empty){
+              await updateDoc(doc(db,"clients",clientSnap.docs[0].id),{userId:user.uid});
+            }
+          }
+          if(!clientSnap.empty){
+            const cd = clientSnap.docs[0].data();
+            if(cd.assignedProgramId){
               const ps = await getDoc(doc(db,"programs",cd.assignedProgramId));
               if(ps.exists()) setProgram({id:ps.id,...ps.data()});
-            } catch(e){ console.warn("program fetch:",e); }
-          } else {
-            setProgram(null);
+            }
           }
-        }, err=>console.warn("client doc listener:",err));
-        unsubRefs.current.push(unsubClient);
-      } catch(e){ console.warn("watchClientDoc:",e); }
-    };
-    watchClientDoc();
+        } catch(e){ console.warn("program load:",e); }
 
-    return cleanupListeners;
+      } catch(e){ console.warn("loadAllData:",e); }
+    };
+
+    loadAllData();
+
+    return () => {};
   },[user]);
 
   // Pass weightLog down to TrackTab and MeTab via prop
@@ -1847,7 +1833,7 @@ export default function App() {
     const logs = await loadLogs(user.uid);
     if(logs.length>0){ setWorkoutLogs(logs); ls(KEYS.LOGS,logs); }
   };
-  const handleSignOut=async()=>{ cleanupListeners(); await signOut(auth); setUser(null); setTab("today"); };
+  const handleSignOut=async()=>{ await signOut(auth); setUser(null); setTab("today"); };
 
   if(!authLoaded) return <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{fontSize:36,fontFamily:F.display,color:C.accent,letterSpacing:"0.1em"}}>LOADING...</div></div>;
   if(!user) return <LoginScreen />;
