@@ -1494,7 +1494,7 @@ function DailyCheckin({ today, todayWB, saveWB, user, showHistory=false, wellbei
 // ═══════════════════════════════════════════════════════════════════════════════
 // ME TAB
 // ═══════════════════════════════════════════════════════════════════════════════
-function MeTab({ user, onSignOut, onGoalsChange, onPerfGoalsChange, weightLog: weightLogProp, setWeightLog: setWeightLogProp }) {
+function MeTab({ user, onSignOut, onGoalsChange, onPerfGoalsChange, weightLog: weightLogProp, setWeightLog: setWeightLogProp, workoutLogs=[] }) {
   const [profile,     setProfile]     = useState(()=>ll(KEYS.PROFILE,{}));
   const [goals,       setGoals]       = useState(()=>ll(KEYS.GOALS,[]));
   const [perfGoals,   setPerfGoals]   = useState(()=>ll(KEYS.PERF_GOALS,[]));
@@ -1698,37 +1698,117 @@ function MeTab({ user, onSignOut, onGoalsChange, onPerfGoalsChange, weightLog: w
         {!perfOpen?(
           selectedPerf.length===0?(
             <div style={{fontSize:12,fontFamily:F.body,color:C.textDim}}>No performance goals — tap CHANGE to add goals</div>
-          ):selectedPerf.map((g,i)=>(
-            <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderTop:i===0?"none":`1px solid ${C.border}`}}>
-              <div style={{fontSize:14,fontFamily:F.display}}>{g.exercise}</div>
-              <div style={{fontSize:14,fontFamily:F.display,color:C.accent}}>{g.goalWeight} lbs{g.deadline?` · ${new Date(g.deadline).toLocaleDateString("en-US",{month:"short",year:"numeric"})}`:""}</div>
-            </div>
-          ))
+          ):selectedPerf.map((g,i)=>{
+            // Get full exercise history for this goal
+            const exHistory = workoutLogs
+              .filter(l=>l.exercises?.some(e=>e.name?.toLowerCase()===g.exercise?.toLowerCase()))
+              .map(l=>{
+                const ex=l.exercises.find(e=>e.name?.toLowerCase()===g.exercise?.toLowerCase());
+                const sets=ex?.sets?.filter(s=>s.completed&&s.weight)||[];
+                const top=sets.reduce((b,s)=>parseFloat(s.weight||0)>parseFloat(b?.weight||0)?s:b,null);
+                return {
+                  date:l.completedAt?.toDate?l.completedAt.toDate():new Date(l.completedAt||0),
+                  topWeight:parseFloat(top?.weight)||0,
+                };
+              })
+              .filter(e=>e.topWeight>0)
+              .sort((a,b)=>a.date-b.date);
+            const best=exHistory.length>0?Math.max(...exHistory.map(e=>e.topWeight)):0;
+            const goal=parseFloat(g.goalWeight)||0;
+            const pct=goal>0?Math.min((best/goal)*100,100):0;
+            const daysLeft=g.deadline?Math.max(0,Math.ceil((new Date(g.deadline)-new Date())/(1000*60*60*24))):null;
+            const lastSession=exHistory[exHistory.length-1];
+            const prevSession=exHistory[exHistory.length-2];
+            const delta=lastSession&&prevSession?lastSession.topWeight-prevSession.topWeight:null;
+            return (
+              <div key={g.id||i} style={{borderTop:i===0?"none":`1px solid ${C.border}`,paddingTop:i===0?0:12,marginTop:i===0?0:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                  <div>
+                    <div style={{fontSize:16,fontFamily:F.display}}>{g.exercise}</div>
+                    <div style={{fontSize:11,fontFamily:F.body,color:C.textMuted,marginTop:2}}>
+                      Best: <span style={{color:best>0?C.text:C.textDim}}>{best>0?`${best} lbs`:"No data yet"}</span>
+                      {" · "}Goal: <span style={{color:C.accent}}>{goal} lbs</span>
+                      {daysLeft!==null&&` · ${daysLeft}d left`}
+                    </div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:22,fontFamily:F.display,color:pct>=100?C.accentGreen:C.accent}}>{Math.round(pct)}%</div>
+                    {delta!==null&&<div style={{fontSize:11,fontFamily:F.body,color:delta>=0?C.accentGreen:C.accentRed}}>{delta>=0?`+${delta}`:delta} lbs last</div>}
+                  </div>
+                </div>
+                {/* Progress bar */}
+                <div style={{height:5,background:C.surface,borderRadius:3,overflow:"hidden",marginBottom:8}}>
+                  <div style={{height:"100%",background:pct>=100?C.accentGreen:C.accent,borderRadius:3,width:`${pct}%`,transition:"width 0.5s"}} />
+                </div>
+                {/* Mini history sparkline */}
+                {exHistory.length>1&&(()=>{
+                  const maxW=Math.max(...exHistory.map(e=>e.topWeight));
+                  const minW=Math.min(...exHistory.map(e=>e.topWeight));
+                  const range=maxW-minW||1;
+                  const w=280,h=36,pad=4;
+                  const pts=exHistory.map((e,idx)=>{
+                    const x=pad+(idx/(exHistory.length-1))*(w-pad*2);
+                    const y=h-pad-((e.topWeight-minW)/range)*(h-pad*2);
+                    return `${x},${y}`;
+                  }).join(" ");
+                  return (
+                    <div style={{background:C.surface,borderRadius:8,padding:"6px 8px",marginBottom:4}}>
+                      <div style={{fontSize:9,fontFamily:F.body,color:C.textMuted,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>PROGRESS — {exHistory.length} SESSIONS</div>
+                      <svg width="100%" viewBox={`0 0 ${w} ${h}`} style={{display:"block"}}>
+                        <polyline points={pts} fill="none" stroke={C.accent} strokeWidth={1.5}/>
+                        {exHistory.map((e,idx)=>{
+                          const x=pad+(idx/(exHistory.length-1))*(w-pad*2);
+                          const y=h-pad-((e.topWeight-minW)/range)*(h-pad*2);
+                          const isLast=idx===exHistory.length-1;
+                          return <circle key={idx} cx={x} cy={y} r={isLast?3.5:2} fill={isLast?C.accent:C.accentBlue}/>;
+                        })}
+                      </svg>
+                      <div style={{display:"flex",justifyContent:"space-between",marginTop:2}}>
+                        <span style={{fontSize:9,fontFamily:F.body,color:C.textDim}}>{exHistory[0].date.toLocaleDateString("en-US",{month:"short",day:"numeric"})}</span>
+                        <span style={{fontSize:9,fontFamily:F.body,color:C.textDim}}>{lastSession?.date.toLocaleDateString("en-US",{month:"short",day:"numeric"})}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+                {exHistory.length===0&&(
+                  <div style={{fontSize:11,fontFamily:F.body,color:C.textDim,fontStyle:"italic"}}>Log a "{g.exercise}" workout to start tracking</div>
+                )}
+              </div>
+            );
+          })
         ):(
           <div>
-            {perfGoals.map(g=>(
-              <div key={g.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px",marginBottom:10}}>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-                  <div>
-                    <div style={{fontSize:9,fontFamily:F.body,color:C.textMuted,fontWeight:700,letterSpacing:"0.12em",marginBottom:4}}>EXERCISE</div>
-                    <input value={g.exercise} onChange={e=>updPerfGoal(g.id,"exercise",e.target.value)} placeholder="e.g. Bench Press"
+            {perfGoals.map(g=>{
+              // Auto-suggest exercises from workout history
+              const loggedExercises=[...new Set(workoutLogs.flatMap(l=>l.exercises?.map(e=>e.name)||[]))];
+              return (
+                <div key={g.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px",marginBottom:10}}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                    <div>
+                      <div style={{fontSize:9,fontFamily:F.body,color:C.textMuted,fontWeight:700,letterSpacing:"0.12em",marginBottom:4}}>EXERCISE</div>
+                      <input value={g.exercise} onChange={e=>updPerfGoal(g.id,"exercise",e.target.value)}
+                        placeholder="e.g. Bench Press" list={`ex-list-${g.id}`}
+                        style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",color:C.text,fontSize:13,fontFamily:F.body,outline:"none",boxSizing:"border-box"}} />
+                      <datalist id={`ex-list-${g.id}`}>
+                        {loggedExercises.map(e=><option key={e} value={e}/>)}
+                      </datalist>
+                    </div>
+                    <div>
+                      <div style={{fontSize:9,fontFamily:F.body,color:C.textMuted,fontWeight:700,letterSpacing:"0.12em",marginBottom:4}}>GOAL (lbs)</div>
+                      <input type="number" value={g.goalWeight} onChange={e=>updPerfGoal(g.id,"goalWeight",e.target.value)} placeholder="315"
+                        style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",color:C.text,fontSize:13,fontFamily:F.body,outline:"none",boxSizing:"border-box"}} />
+                    </div>
+                  </div>
+                  <div style={{marginBottom:8}}>
+                    <div style={{fontSize:9,fontFamily:F.body,color:C.textMuted,fontWeight:700,letterSpacing:"0.12em",marginBottom:4}}>DEADLINE</div>
+                    <input type="date" value={g.deadline} onChange={e=>updPerfGoal(g.id,"deadline",e.target.value)}
                       style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",color:C.text,fontSize:13,fontFamily:F.body,outline:"none",boxSizing:"border-box"}} />
                   </div>
-                  <div>
-                    <div style={{fontSize:9,fontFamily:F.body,color:C.textMuted,fontWeight:700,letterSpacing:"0.12em",marginBottom:4}}>GOAL (lbs)</div>
-                    <input type="number" value={g.goalWeight} onChange={e=>updPerfGoal(g.id,"goalWeight",e.target.value)} placeholder="315"
-                      style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",color:C.text,fontSize:13,fontFamily:F.body,outline:"none",boxSizing:"border-box"}} />
-                  </div>
+                  <button onClick={()=>rmPerfGoal(g.id)}
+                    style={{padding:"5px 12px",borderRadius:8,border:`1px solid ${C.accentRed}44`,background:"transparent",color:C.accentRed,cursor:"pointer",fontFamily:F.display,fontSize:11}}>REMOVE</button>
                 </div>
-                <div style={{marginBottom:8}}>
-                  <div style={{fontSize:9,fontFamily:F.body,color:C.textMuted,fontWeight:700,letterSpacing:"0.12em",marginBottom:4}}>DEADLINE</div>
-                  <input type="date" value={g.deadline} onChange={e=>updPerfGoal(g.id,"deadline",e.target.value)}
-                    style={{width:"100%",background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",color:C.text,fontSize:13,fontFamily:F.body,outline:"none",boxSizing:"border-box"}} />
-                </div>
-                <button onClick={()=>rmPerfGoal(g.id)}
-                  style={{padding:"5px 12px",borderRadius:8,border:`1px solid ${C.accentRed}44`,background:"transparent",color:C.accentRed,cursor:"pointer",fontFamily:F.display,fontSize:11}}>REMOVE</button>
-              </div>
-            ))}
+              );
+            })}
             <button onClick={addPerfGoal}
               style={{width:"100%",padding:"10px",borderRadius:8,border:`1px solid ${C.border}`,background:"transparent",color:C.text,fontFamily:F.display,fontSize:14,cursor:"pointer",borderStyle:"dashed"}}>
               + ADD GOAL
@@ -1923,7 +2003,7 @@ export default function App() {
         {tab==="program" &&<ProgramTab program={program} onStartWorkout={setActiveWorkout} />}
         {tab==="habits"  &&<HabitsTab user={user} habits={habits} setHabits={setHabits} habitDone={habitDone} setHabitDone={setHabitDone} />}
         {tab==="track"   &&<TrackTab workoutLogs={workoutLogs} habits={habits} habitDone={habitDone} weightLog={weightLog} onRefresh={handleRefresh} user={user} />}
-        {tab==="me"      &&<MeTab user={user} onSignOut={handleSignOut} onGoalsChange={setGoals} onPerfGoalsChange={setPerfGoals} weightLog={weightLog} setWeightLog={setWeightLog} />}
+        {tab==="me"      &&<MeTab user={user} onSignOut={handleSignOut} onGoalsChange={setGoals} onPerfGoalsChange={setPerfGoals} weightLog={weightLog} setWeightLog={setWeightLog} workoutLogs={workoutLogs} />}
       </div>
 
       <nav style={{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:430,background:C.surface,borderTop:`1px solid ${C.border}`,display:"flex",justifyContent:"space-around",padding:"10px 0 20px",zIndex:100}}>
