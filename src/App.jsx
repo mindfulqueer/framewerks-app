@@ -1087,7 +1087,7 @@ function HabitsTab({ user, habits, setHabits, habitDone, setHabitDone }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // TRACK TAB (History + Progress + Weight + Check-in)
 // ═══════════════════════════════════════════════════════════════════════════════
-function TrackTab({ workoutLogs, habits, habitDone, weightLog: weightLogProp, onRefresh, user }) {
+function TrackTab({ workoutLogs, setWorkoutLogs, habits, habitDone, weightLog: weightLogProp, onRefresh, user }) {
   const [view,     setView]    = useState("history");
   const [filter,   setFilter]  = useState("all");
   const [selected, setSelected]= useState(null);
@@ -1134,14 +1134,60 @@ function TrackTab({ workoutLogs, habits, habitDone, weightLog: weightLogProp, on
   if(selected){
     const log=workoutLogs.find(l=>l.id===selected);
     if(!log){setSelected(null);return null;}
+
+    // Get current date as string for the input
+    const currentDate = log.completedAt?.toDate
+      ? log.completedAt.toDate().toISOString().slice(0,10)
+      : log.completedAt
+        ? new Date(log.completedAt).toISOString().slice(0,10)
+        : new Date().toISOString().slice(0,10);
+
+    const handleDateChange = async (newDateStr) => {
+      if(!newDateStr) return;
+      const newDate = new Date(newDateStr + "T12:00:00"); // noon to avoid timezone issues
+      // Update localStorage
+      const updatedLogs = workoutLogs.map(l =>
+        l.id === selected ? { ...l, completedAt: newDate.toISOString() } : l
+      );
+      if(setWorkoutLogs) setWorkoutLogs(updatedLogs); // update parent state immediately
+      ls(KEYS.LOGS, updatedLogs);
+      // Update Firestore if it has a real Firebase ID (>15 chars)
+      if(user && log.id && log.id.length > 15){
+        try {
+          await updateDoc(doc(db, "workoutLogs", log.id), {
+            completedAt: newDate,
+            dateEdited: serverTimestamp(),
+          });
+        } catch(e){ console.warn("date update failed:", e); }
+      }
+    };
+
     return (
       <div style={{paddingTop:24}}>
         <button onClick={()=>setSelected(null)} style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 16px",color:C.text,cursor:"pointer",fontFamily:F.display,fontSize:13,marginBottom:20}}>← BACK</button>
-        <div style={{fontSize:28,fontFamily:F.display,marginBottom:4}}>{log.workoutName}</div>
-        <div style={{fontSize:11,fontFamily:F.body,color:C.textMuted,marginBottom:16}}>
-          {log.completedAt?.toDate?log.completedAt.toDate().toLocaleString():log.completedAt?new Date(log.completedAt).toLocaleString():"–"}
-          {log.duration?` · ${Math.floor(log.duration/60)}min`:""}
+        <div style={{fontSize:28,fontFamily:F.display,marginBottom:8}}>{log.workoutName}</div>
+
+        {/* Date — editable */}
+        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",marginBottom:16,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+          <div>
+            <div style={{fontSize:10,fontFamily:F.body,color:C.textMuted,fontWeight:700,letterSpacing:"0.12em",marginBottom:3}}>DATE COMPLETED</div>
+            <div style={{fontSize:15,fontFamily:F.body,color:C.text}}>
+              {log.completedAt?.toDate
+                ? log.completedAt.toDate().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})
+                : log.completedAt
+                  ? new Date(log.completedAt).toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})
+                  : "–"}
+              {log.duration ? ` · ${Math.floor(log.duration/60)}min` : ""}
+            </div>
+          </div>
+          <div style={{flexShrink:0}}>
+            <div style={{fontSize:10,fontFamily:F.body,color:C.textMuted,fontWeight:700,letterSpacing:"0.12em",marginBottom:3}}>CHANGE DATE</div>
+            <input type="date" defaultValue={currentDate}
+              onChange={e=>handleDateChange(e.target.value)}
+              style={{background:C.surface,border:`1px solid ${C.accent}44`,borderRadius:8,padding:"6px 10px",color:C.accent,fontSize:13,fontFamily:F.body,outline:"none",cursor:"pointer"}} />
+          </div>
         </div>
+
         {log.exercises?.map((ex,i)=>(
           <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",marginBottom:8}}>
             <div style={{fontSize:16,fontFamily:F.display,marginBottom:8}}>{ex.name}</div>
@@ -2002,7 +2048,7 @@ export default function App() {
         {tab==="today"   &&<TodayTab user={user} workoutLogs={workoutLogs} program={program} perfGoals={perfGoals} goals={goals} habits={habits} habitDone={habitDone} onStartWorkout={setActiveWorkout} />}
         {tab==="program" &&<ProgramTab program={program} onStartWorkout={setActiveWorkout} />}
         {tab==="habits"  &&<HabitsTab user={user} habits={habits} setHabits={setHabits} habitDone={habitDone} setHabitDone={setHabitDone} />}
-        {tab==="track"   &&<TrackTab workoutLogs={workoutLogs} habits={habits} habitDone={habitDone} weightLog={weightLog} onRefresh={handleRefresh} user={user} />}
+        {tab==="track"   &&<TrackTab workoutLogs={workoutLogs} setWorkoutLogs={setWorkoutLogs} habits={habits} habitDone={habitDone} weightLog={weightLog} onRefresh={handleRefresh} user={user} />}
         {tab==="me"      &&<MeTab user={user} onSignOut={handleSignOut} onGoalsChange={setGoals} onPerfGoalsChange={setPerfGoals} weightLog={weightLog} setWeightLog={setWeightLog} workoutLogs={workoutLogs} />}
       </div>
 
